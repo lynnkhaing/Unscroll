@@ -208,6 +208,16 @@
   .nexttopic { display: block; width: 100%; text-align: left; background: #1d1830; color: var(--fg); border: 1px solid #3a2f63;
     border-radius: 12px; padding: 10px 12px; margin-top: 8px; font-size: 14px; }
   .nexttopic small { display: block; color: var(--muted); }
+  .side button { position: relative; }
+  .side button[data-label]::after { content: attr(data-label); position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    margin-top: 3px; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 4px #000; white-space: nowrap; }
+  .reel.video > .side { gap: 26px; }
+  .transcript { z-index: 8; background: #0f0f16; }
+  .hint { position: absolute; top: 46%; left: 50%; transform: translateX(-50%); z-index: 6; background: rgba(0,0,0,.7);
+    padding: 10px 16px; border-radius: 14px; font-size: 14px; text-align: center; pointer-events: none; transition: opacity .4s; }
+  .nudge { background: #1d1830; border: 1px solid #3a2f63; border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
+  .prev { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  #srsChart svg { width: 100%; height: auto; display: block; }
 </style>
 </head>
 <body>
@@ -312,6 +322,45 @@ function renderReview() {
   btn.classList.remove("hidden");
 }
 
+/* ---------------- spaced repetition (Leitner boxes) + saved explanations ---------------- */
+const INTERVALS = [1, 2, 4, 7, 15];  // days until the next review for boxes 1..5
+function loadJ(k, d) { try { return JSON.parse(localStorage.getItem(k) || d); } catch { return JSON.parse(d); } }
+function saveJ(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+function srsRecord(c, ok) {
+  const all = loadJ("unscroll.srs", "{}"), now = Date.now();
+  const r = all[c.title] || { box: 1, topic: deck?.deck_title || "", reviews: [] };
+  r.box = ok ? Math.min(5, r.box + 1) : 1;
+  r.last = now; r.next = now + INTERVALS[r.box - 1] * 864e5; r.topic = r.topic || deck?.deck_title || "";
+  r.reviews.push({ t: now, ok }); r.reviews = r.reviews.slice(-20);
+  all[c.title] = r; saveJ("unscroll.srs", all);
+}
+function srsChart() {
+  // Forgetting curve per topic: retention = exp(-days since review / stability); stability grows with the box.
+  const all = loadJ("unscroll.srs", "{}"), topics = {};
+  Object.entries(all).forEach(([title, r]) => (topics[r.topic || "Other"] ||= []).push(r));
+  const names = Object.keys(topics).slice(0, 4);
+  if (!names.length) return "";
+  const W = 320, H = 150, P = 28, days = 14, now = Date.now();
+  const colors = ["#a78bfa", "#38bdf8", "#f472b6", "#fbbf24"];
+  const x = d => P + (d / days) * (W - P - 8), y = v => 8 + (1 - v) * (H - P - 8);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Predicted memory strength for each topic over the next 14 days">`;
+  [0, .5, 1].forEach(v => svg += `<line x1="${P}" x2="${W - 8}" y1="${y(v)}" y2="${y(v)}" stroke="#2a2a35"/><text x="2" y="${y(v) + 4}" fill="#a1a1aa" font-size="9">${v * 100}%</text>`);
+  [0, 7, 14].forEach(d => svg += `<text x="${x(d) - 8}" y="${H - 6}" fill="#a1a1aa" font-size="9">${d ? "+" + d + "d" : "today"}</text>`);
+  names.forEach((n, ti) => {
+    const rs = topics[n]; let path = "", dots = "";
+    for (let d = 0; d <= days; d += .5) {
+      const t = now + d * 864e5;
+      const v = rs.reduce((a, r) => a + Math.exp(-((t - r.last) / 864e5) / (INTERVALS[r.box - 1] * 1.4)), 0) / rs.length;
+      path += `${d ? "L" : "M"}${x(d).toFixed(1)},${y(v).toFixed(1)}`;
+    }
+    rs.forEach(r => { const d = (r.next - now) / 864e5; if (d >= 0 && d <= days) dots += `<circle cx="${x(d)}" cy="${y(Math.exp(-(r.next - r.last) / 864e5 / (INTERVALS[r.box - 1] * 1.4)))}" r="3.5" fill="${colors[ti]}"/>`; });
+    svg += `<path d="${path}" fill="none" stroke="${colors[ti]}" stroke-width="2.2"/>${dots}`;
+  });
+  svg += `</svg>` + names.map((n, ti) => `<span class="small" style="margin-right:10px"><span style="color:${colors[ti]}">●</span> ${esc(n.slice(0, 32))}</span>`).join("");
+  return `<div class="lh">Memory strength · spaced repetition</div><div id="srsChart">${svg}</div>
+    <p class="small" style="margin:4px 0 0">Lines fade as you forget; dots are your next review dates. Each correct review pushes the next one further out (1 → 2 → 4 → 7 → 15 days).</p>`;
+}
+
 /* ---------------- learning history (saved on this device) ---------------- */
 let hist = null;
 function loadHist() { try { return JSON.parse(localStorage.getItem("unscroll.history") || "[]"); } catch { return []; } }
@@ -323,15 +372,15 @@ function saveHist() {
 }
 function renderLearn() {
   const all = loadHist(), body = $("#learnBody");
-  if (!all.length) { body.innerHTML = "Your topics, quiz scores, and teach-back explanations will show up here. Saved on this device: no account needed."; return; }
+  if (!all.length && !Object.keys(loadJ("unscroll.srs", "{}")).length) { body.innerHTML = "Your topics, quiz scores, and teach-back explanations will show up here. Saved on this device: no account needed."; return; }
   const pct = h => h.quiz.answered ? Math.round(100 * h.quiz.correct / h.quiz.answered) + "% quiz" : "no quiz yet";
   const tb = h => h.teach.length ? " · teach-back " + Math.round(h.teach.reduce((a, t) => a + t.score, 0) / h.teach.length) : "";
-  const ex = all.flatMap(h => h.teach.map(t => ({ ...t, deck: h.title }))).slice(0, 3);
+  const ex = Object.entries(loadJ("unscroll.expl", "{}")).map(([title, e]) => ({ title, ...e })).sort((a, b) => b.date - a.date).slice(0, 4);
   const next = (all.find(h => h.next?.length) || {}).next || [];
-  body.innerHTML = `<div class="lh">Topics</div>` + all.slice(0, 6).map(h =>
+  body.innerHTML = srsChart() + `<div class="lh">Topics</div>` + all.slice(0, 6).map(h =>
       `<div class="topic"><span>${esc(h.title)} <span class="small">· ${new Date(h.date).toLocaleDateString()}</span></span><span class="pill">${pct(h)}${tb(h)}</span></div>`).join("") +
     (ex.length ? `<div class="lh">Your explanations</div>` + ex.map(t =>
-      `<div class="topic"><span><b>${esc(t.title)}</b>: “${esc(t.explanation.slice(0, 90))}${t.explanation.length > 90 ? "…" : ""}”</span><span class="pill">${t.score}/100</span></div>`).join("") : "") +
+      `<div class="topic"><span><b>${esc(t.title)}</b>: “${esc((t.text || "").slice(0, 90))}${(t.text || "").length > 90 ? "…" : ""}”</span><span class="pill">${t.score}/100</span></div>`).join("") : "") +
     (next.length ? `<div class="lh">What to learn next (suggested by Gemma 4)</div>` + next.map(t =>
       `<button type="button" class="nexttopic" data-topic="${esc(t.topic)}">🧭 ${esc(t.topic)}<small>${esc(t.why)} · tap to load a Wikipedia reading</small></button>`).join("") : "") +
     `<p class="small" style="margin-top:12px">Saved on this device only. Sign-in to sync across devices is next on the roadmap.</p>`;
@@ -557,20 +606,36 @@ function reelCard(i) {
     <div class="subtitle" aria-live="off"></div>
     <div class="credit"><span class="vcredit">${creditHtml(c)}</span> <span class="vstate">🎙️ AI voice</span></div>
     <div class="side">
-      <button type="button" class="replay" aria-label="Play or pause">⏸</button>
-      <button type="button" class="tx" aria-label="Show transcript">📝</button>
-      <button type="button" class="save" aria-label="Save to review queue">🔖</button>
+      <button type="button" class="replay" aria-label="Play or pause" data-label="Pause">⏸</button>
+      <button type="button" class="tx" aria-label="Show transcript" data-label="Transcript">📝</button>
+      <button type="button" class="save" aria-label="Save to review queue" data-label="Save">🔖</button>
     </div>
     <div class="transcript hidden">
-      <h3>${esc(c.emoji)} ${esc(c.title)}</h3><p>${esc(c.script)}</p>
+      <div class="row" style="justify-content:space-between"><h3>${esc(c.emoji)} ${esc(c.title)}</h3>
+        <button type="button" class="btn ghost txclose" style="padding:6px 12px">✕ Close</button></div>
+      <p>${esc(c.script)}</p>
       <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
       <div class="ai-note">Script &amp; voice are AI-generated from your reading. On-screen numbers, quotes, and labels are checked against the source text; anything unverifiable is replaced with a picture.</div>
     </div>`;
   el._beats = beats; el._chunks = chunksOf(c.script); el._beat = -1; el._chunk = -1;
-  $(".replay", el).onclick = () => el._ended ? playReel(el, i, true) : togglePause(el);
-  $(".stage", el).onclick = () => { if (!el._ended) togglePause(el); };
-  $(".tx", el).onclick = () => $(".transcript", el).classList.toggle("hidden");
-  $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
+  $(".replay", el).onclick = e => { e.stopPropagation(); el._ended ? playReel(el, i, true) : togglePause(el); };
+  // Tap anywhere on the video (not on a button/link/panel) to pause or resume.
+  el.addEventListener("click", e => {
+    if (e.target.closest("button, a, .transcript, .endov") || el._ended) return;
+    togglePause(el);
+  });
+  $(".tx", el).onclick = e => {
+    e.stopPropagation();
+    $(".transcript", el).classList.remove("hidden");
+    if (!paused && !el._ended && current === el) togglePause(el);  // reading the transcript pauses the video
+  };
+  $(".txclose", el).onclick = e => { e.stopPropagation(); $(".transcript", el).classList.add("hidden"); };
+  $(".save", el).onclick = e => { e.stopPropagation(); addToReview(c, "saved"); e.currentTarget.textContent = "✅"; e.currentTarget.dataset.label = "Saved"; };
+  if (i === 0) {
+    const h = document.createElement("div"); h.className = "hint";
+    h.innerHTML = "👆 Tap the video to pause<br>👆 Swipe up for the next reel";
+    el.appendChild(h); setTimeout(() => { h.style.opacity = 0; }, 4500); setTimeout(() => h.remove(), 5200);
+  }
   showAt(el, 0);
   return el;
 }
@@ -585,6 +650,8 @@ function showAt(el, ch) {
     sc.classList.add("on");
     sc.querySelectorAll(".num").forEach(countUp);
     el.querySelectorAll(".seg").forEach((s, j) => { s.classList.toggle("done", j < k); s.classList.toggle("now", j === k); });
+    const cc = deck.concepts[+el.dataset.reel];
+    if (beats[k].scene === "image") $(".vcredit", el).innerHTML = creditHtml(beats[k].visual ? { visual: beats[k].visual } : cc);
   }
   // beat progress inside the current segment
   const next = beats[k + 1]?.at ?? deck.concepts[+el.dataset.reel].script.length;
@@ -606,6 +673,25 @@ function countUp(n) {
     if (p < 1) requestAnimationFrame(step);
   };
   step();
+}
+// Each extra image beat gets its own picture of what that beat says (fetched as the reel comes up).
+function loadBeatImages(el, i) {
+  const c = deck.concepts[i]; let first = true;
+  el._beats.forEach((b, k) => {
+    if (b.scene !== "image") return;
+    if (first) { first = false; return; }
+    if (!b.image_prompt || b._req) return;
+    b._req = 1;
+    api("/api/visual", { method: "POST", headers: JSON_H, body: JSON.stringify({ title: `${c.title} #${k}`, script: b.say,
+        subject: deck.subject || "", image_query: "", image_prompt: b.image_prompt }) })
+      .then(v => {
+        if (v.kind !== "ai" && v.kind !== "wikimedia") return;
+        b.visual = v;
+        const f = el.querySelector(`.scene[data-k="${k}"] .frame`);
+        if (f) { f.classList.remove("doc"); f.innerHTML = `<img class="kb" src="${v.kind === "wikimedia" ? esc(v.src) : v.src}" alt="${esc(b.say)}" referrerpolicy="no-referrer">`; }
+        if (el._beat === k) $(".vcredit", el).innerHTML = creditHtml({ visual: v });
+      }).catch(() => {});
+  });
 }
 function visHtml(v) { return ""; }  // legacy hook (visuals now live inside image scenes)
 const visQ = []; let visActive = 0;
@@ -630,7 +716,10 @@ function renderVis(i) {
   const el = feed.querySelector(`.reel[data-reel="${i}"]`); if (!el) return;
   const c = deck.concepts[i];
   if (!c.visual) return;
-  el.querySelectorAll(".sc-image .frame").forEach(f => { f.classList.toggle("doc", c.visual.kind === "source"); f.innerHTML = frameInner(c); });
+  el.querySelectorAll(".sc-image").forEach(sc => {
+    if (el._beats[+sc.dataset.k]?.visual) return;  // keep a beat's own picture
+    const f = $(".frame", sc); f.classList.toggle("doc", c.visual.kind === "source"); f.innerHTML = frameInner(c);
+  });
   $(".vcredit", el).innerHTML = creditHtml(c);
 }
 
@@ -659,6 +748,7 @@ function fillQuiz(el, q, c) {
     if (!ok) b.classList.add("wrong");
     stats.answered++; if (ok) { stats.correct++; removeFromReview(c.title); } else addToReview(c, "missed quiz");
     if (hist) { hist.quiz.answered++; if (ok) hist.quiz.correct++; saveHist(); }
+    srsRecord(c, ok);
     $(".feedback", body).innerHTML = (ok ? "✅ Nice. " : `❌ Not quite — added <b>${esc(c.title)}</b> to tomorrow's review. `) + esc(q.explanation);
     renderEnd();
   });
@@ -668,7 +758,8 @@ function teachCard(i) {
   el.className = "card teach";
   el.innerHTML = `<div class="kicker" style="color:#ffb35c">🎤 Teach it back</div>
     <h3>Explain <em>${esc(c.title)}</em> like you're telling a friend.</h3>
-    <textarea placeholder="Type, or tap 🎙️ and say it out loud…" aria-label="Your explanation"></textarea>
+    ${(() => { const p = loadJ("unscroll.expl", "{}")[c.title]; return p ? `<p class="prev">✍️ Your last explanation (${p.score}/100, ${new Date(p.date).toLocaleDateString()}) is below. Can you make it better?</p>` : ""; })()}
+    <textarea placeholder="Type, or tap 🎙️ and say it out loud…" aria-label="Your explanation">${esc(loadJ("unscroll.expl", "{}")[c.title]?.text || "")}</textarea>
     <div class="row" style="margin-top:10px">
       <button class="btn ghost mic" type="button">🎙️ Speak</button>
       <button class="btn check" type="button">Check me</button>
@@ -691,6 +782,7 @@ function setupTeach(el, c) {
     rec.onend = rec.onerror = () => { rec = null; mic.textContent = "🎙️ Speak"; };
     rec.start(); mic.textContent = "⏹ Stop";
   };
+  let attempts = 0;
   $(".check", el).onclick = async () => {
     if (rec) rec.stop();
     const btn = $(".check", el); btn.disabled = true;
@@ -700,14 +792,25 @@ function setupTeach(el, c) {
         body: JSON.stringify({ concept: lean(c), explanation: ta.value }) });
       const color = r.score >= 80 ? "var(--good)" : r.score >= 50 ? "var(--mid)" : "var(--bad)";
       const li = a => a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+      attempts++;
       out.innerHTML = `<div class="result">
         <div class="score" style="color:${color}">${r.score}/100 · ${esc(r.verdict)}</div>
         ${r.got_right.length ? `<h4>✅ You got</h4>${li(r.got_right)}` : ""}
-        ${r.missed.length ? `<h4>🧩 You missed</h4>${li(r.missed)}` : ""}
+        ${r.score < 80 && r.nudges.length ? `<h4>🤔 Think about…</h4>${r.nudges.map(n => `<div class="nudge">${esc(n)}</div>`).join("")}` : ""}
         ${r.misconceptions.length ? `<h4>⚠️ Careful</h4>${li(r.misconceptions)}` : ""}
-        ${r.tip ? `<p>💡 ${esc(r.tip)}</p>` : ""}
-        <div class="small">📌 Source p.${esc(r.page)} — “${esc(r.source_quote)}”</div>
-        <div class="model-tag">Graded by Gemma 4 against the source only</div></div>`;
+        ${r.score < 80 ? `<div class="row" style="margin-top:10px">
+          <button type="button" class="btn retry">✏️ Try again</button>
+          <button type="button" class="btn ghost reveal">${attempts < 2 ? "🔒 Reveal after 2 tries" : "👀 Show what I missed"}</button></div>
+          <div class="revealed hidden">${r.missed.length ? `<h4>🧩 Missing ideas</h4>${li(r.missed)}` : ""}
+          <div class="small">📌 Source p.${esc(r.page)} — “${esc(r.source_quote)}”</div></div>` : `<p>🎉 ${esc(r.tip)}</p>`}
+        <div class="model-tag">Graded by Gemma 4 against the source only · saved to Your learning</div></div>`;
+      const rt = $(".retry", out), rv = $(".reveal", out);
+      if (rt) rt.onclick = () => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); };
+      if (rv) { rv.disabled = attempts < 2; rv.onclick = () => $(".revealed", out).classList.remove("hidden"); }
+      const ex = loadJ("unscroll.expl", "{}");
+      ex[c.title] = { text: ta.value.trim(), score: r.score, date: Date.now(), topic: deck.deck_title, attempts: (ex[c.title]?.attempts || 0) + 1 };
+      saveJ("unscroll.expl", ex);
+      srsRecord(c, r.score >= 70);
       stats.teach.push(r.score);
       if (hist) { hist.teach.push({ title: c.title, score: r.score, explanation: ta.value.trim(), missed: r.missed }); saveHist(); }
       if (r.score < 70) addToReview(c, "teach-back"); else removeFromReview(c.title);
@@ -801,19 +904,19 @@ function togglePause(el) {
     paused = true; pauseStart = performance.now();
     try { actx && actx.suspend(); } catch {}
     try { speechSynthesis.pause(); } catch {}
-    $("span", ov).textContent = "⏸"; ov.classList.add("show"); btn.textContent = "▶";
+    $("span", ov).textContent = "⏸"; ov.classList.add("show"); btn.textContent = "▶"; btn.dataset.label = "Play";
   } else {
     paused = false; pausedTotal += performance.now() - pauseStart;
     try { actx && actx.resume(); } catch {}
     try { speechSynthesis.resume(); } catch {}
-    $("span", ov).textContent = "▶"; ov.classList.add("show"); btn.textContent = "⏸";
+    $("span", ov).textContent = "▶"; ov.classList.add("show"); btn.textContent = "⏸"; btn.dataset.label = "Pause";
     setTimeout(() => ov.classList.remove("show"), 500);
   }
 }
 function reelEnded(el, tok) {
   if (el._ended || tok !== playToken) return;
   el._ended = true;
-  $(".replay", el).textContent = "↻";
+  $(".replay", el).textContent = "↻"; $(".replay", el).dataset.label = "Replay";
   const i = +el.dataset.reel, ov = document.createElement("div");
   ov.className = "endov";
   ov.innerHTML = `<button class="btn ghost" type="button">↻ Replay</button><button class="btn" type="button">Next ↓ <span class="cd">3</span></button>`;
@@ -859,7 +962,7 @@ function playReel(el, i, force) {
   stopAudio();
   const c = deck.concepts[i], tok = playToken;
   $(".replay", el).classList.remove("attn");
-  $(".replay", el).textContent = "⏸";
+  $(".replay", el).textContent = "⏸"; $(".replay", el).dataset.label = "Pause";
   el._ended = false; el.querySelector(".endov")?.remove(); $(".pp", el).classList.remove("show");
   el._beat = -1; el._chunk = -1; showAt(el, 0);
   if (muted && !force) return silentClock(el, tok, c, "🔇 muted · captions only");
@@ -894,7 +997,8 @@ function playReel(el, i, force) {
     }
   };
   e.listeners.add(pump); pump();
-  setTimeout(() => { if (tok === playToken && !started) { e.listeners.delete(pump); speakBrowser(el, c, tok); } }, 8000);
+  setTimeout(() => { if (tok === playToken && !started && !paused) { e.listeners.delete(pump); speakBrowser(el, c, tok); } }, 8000);
+  loadBeatImages(el, i); if (deck.concepts[i + 1]) { const n = feed.querySelector(`.reel[data-reel="${i + 1}"]`); if (n) loadBeatImages(n, i + 1); }
 }
 function pickVoice() {
   const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
