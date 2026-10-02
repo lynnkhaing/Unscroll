@@ -266,6 +266,7 @@
     <textarea id="text" placeholder="Paste an article, chapter, or lecture notes…"></textarea>
     <div class="row" style="margin-top:12px; justify-content:space-between">
       <button class="btn ghost" id="sampleBtn" type="button" title="Fills in a short psychology reading so you can try it">Try a sample reading</button>
+      <button class="btn ghost" id="demoBtn" type="button" title="Opens a ready-made feed of the sample reading instantly (no waiting)">⚡ Instant demo</button>
       <button class="btn" id="goBtn" type="button">Unscroll it →</button>
     </div>
     <div id="status" class="hidden" style="margin-top:14px"></div>
@@ -320,7 +321,7 @@ The effect can be reduced. Singling out one person ("You in the red jacket, call
 
 const JSON_H = { "Content-Type": "application/json" };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const lean = ({ figure, visual, ...c }) => c;
+const lean = ({ figure, visual, quiz, beats, ...c }) => c;
 let deck = null, muted = false, stats = null, feedIO = null, current = null, finished = true, reviewMode = false;
 const feed = $("#feed");
 
@@ -437,6 +438,16 @@ drop.addEventListener("drop", e => pickFile(e.dataTransfer.files[0]));
 function pickFile(f) { if (!f) return; pickedFile = f; $("#url").value = ""; $("#fname").textContent = `✓ ${f.name} (${(f.size/1024/1024).toFixed(1)} MB)`; }
 $("#sampleBtn").onclick = () => { pickedFile = null; $("#fname").textContent = ""; $("#url").value = ""; $("#text").value = SAMPLE; };
 $("#goBtn").onclick = generate;
+// Instant demo: a feed pre-generated from the sample reading (same pipeline, saved ahead of time).
+$("#demoBtn").onclick = async () => {
+  unlockAudio();
+  try {
+    const d = await (await fetch("/static/demo-deck.json")).json();
+    openFeed({ deck_title: d.deck_title, subject: d.subject, concepts: [] }, false);
+    d.concepts.forEach(c => addConcept(c));
+    finishFeed();
+  } catch (e) { setStatus("Couldn't load the demo: " + e.message, true); }
+};
 $("#reviewBtn").onclick = () => {
   const q = loadQueue(); if (!q.length) return;
   unlockAudio();
@@ -766,6 +777,7 @@ function quizCard(ci) {
   el.innerHTML = `<div class="kicker" style="color:#c9bcff">⚡ Quick check</div>
     <div class="qbody"><div class="loading"><div class="spinner"></div><span>Gemma is writing your question…</span></div></div>`;
   const d = deck;
+  if (d.concepts[ci]?.quiz) { setTimeout(() => fillQuiz(el, d.concepts[ci].quiz, d.concepts[ci])); return el; }
   api("/api/quiz", { method: "POST", headers: JSON_H, body: JSON.stringify({ concepts: [lean(d.concepts[ci])] }) })
     .then(r => fillQuiz(el, r.questions[0], d.concepts[ci]))
     .catch(e => { $(".qbody", el).innerHTML = `<p class="err">Couldn't load quiz: ${esc(e.message)}</p>`; });
