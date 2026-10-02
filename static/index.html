@@ -202,6 +202,12 @@
   .pp.show span { opacity: 1; }
   .endov { position: absolute; left: 0; right: 0; bottom: 150px; z-index: 6; display: flex; gap: 12px; justify-content: center; }
   .endov .btn { box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .topic { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .topic:first-child { border-top: 0; }
+  .lh { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .nexttopic { display: block; width: 100%; text-align: left; background: #1d1830; color: var(--fg); border: 1px solid #3a2f63;
+    border-radius: 12px; padding: 10px 12px; margin-top: 8px; font-size: 14px; }
+  .nexttopic small { display: block; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -221,6 +227,9 @@
       </label>
       <div id="fname" class="small" style="margin-top:8px"></div>
     </div>
+    <div class="or">— or paste a link —</div>
+    <input id="url" type="url" placeholder="https://… article, Wikipedia page, or PDF link" aria-label="Web link"
+      style="width:100%;background:#0f0f15;color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit">
     <div class="or">— or paste text —</div>
     <textarea id="text" placeholder="Paste an article, chapter, or lecture notes…"></textarea>
     <div class="row" style="margin-top:12px; justify-content:space-between">
@@ -228,6 +237,11 @@
       <button class="btn" id="goBtn" type="button">Unscroll it →</button>
     </div>
     <div id="status" class="hidden" style="margin-top:14px"></div>
+  </section>
+
+  <section class="panel" id="learnPanel">
+    <strong>📚 Your learning</strong>
+    <div id="learnBody" class="small" style="margin-top:6px"></div>
   </section>
 
   <section class="panel" id="reviewPanel">
@@ -298,6 +312,36 @@ function renderReview() {
   btn.classList.remove("hidden");
 }
 
+/* ---------------- learning history (saved on this device) ---------------- */
+let hist = null;
+function loadHist() { try { return JSON.parse(localStorage.getItem("unscroll.history") || "[]"); } catch { return []; } }
+function saveHist() {
+  if (!hist) return;
+  const all = loadHist().filter(h => h.id !== hist.id);
+  all.unshift(hist);
+  try { localStorage.setItem("unscroll.history", JSON.stringify(all.slice(0, 20))); } catch {}
+}
+function renderLearn() {
+  const all = loadHist(), body = $("#learnBody");
+  if (!all.length) { body.innerHTML = "Your topics, quiz scores, and teach-back explanations will show up here. Saved on this device: no account needed."; return; }
+  const pct = h => h.quiz.answered ? Math.round(100 * h.quiz.correct / h.quiz.answered) + "% quiz" : "no quiz yet";
+  const tb = h => h.teach.length ? " · teach-back " + Math.round(h.teach.reduce((a, t) => a + t.score, 0) / h.teach.length) : "";
+  const ex = all.flatMap(h => h.teach.map(t => ({ ...t, deck: h.title }))).slice(0, 3);
+  const next = (all.find(h => h.next?.length) || {}).next || [];
+  body.innerHTML = `<div class="lh">Topics</div>` + all.slice(0, 6).map(h =>
+      `<div class="topic"><span>${esc(h.title)} <span class="small">· ${new Date(h.date).toLocaleDateString()}</span></span><span class="pill">${pct(h)}${tb(h)}</span></div>`).join("") +
+    (ex.length ? `<div class="lh">Your explanations</div>` + ex.map(t =>
+      `<div class="topic"><span><b>${esc(t.title)}</b>: “${esc(t.explanation.slice(0, 90))}${t.explanation.length > 90 ? "…" : ""}”</span><span class="pill">${t.score}/100</span></div>`).join("") : "") +
+    (next.length ? `<div class="lh">What to learn next (suggested by Gemma 4)</div>` + next.map(t =>
+      `<button type="button" class="nexttopic" data-topic="${esc(t.topic)}">🧭 ${esc(t.topic)}<small>${esc(t.why)} · tap to load a Wikipedia reading</small></button>`).join("") : "") +
+    `<p class="small" style="margin-top:12px">Saved on this device only. Sign-in to sync across devices is next on the roadmap.</p>`;
+  body.querySelectorAll(".nexttopic").forEach(b => b.onclick = () => {
+    $("#url").value = "https://en.wikipedia.org/wiki/Special:Search?search=" + encodeURIComponent(b.dataset.topic) + "&go=Go";
+    $("#text").value = ""; pickedFile = null; $("#fname").textContent = "";
+    $("#url").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
 /* ---------------- home ---------------- */
 let pickedFile = null;
 const drop = $("#drop");
@@ -305,8 +349,8 @@ $("#file").addEventListener("change", e => pickFile(e.target.files[0]));
 ["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => pickFile(e.dataTransfer.files[0]));
-function pickFile(f) { if (!f) return; pickedFile = f; $("#fname").textContent = `✓ ${f.name} (${(f.size/1024/1024).toFixed(1)} MB)`; }
-$("#sampleBtn").onclick = () => { pickedFile = null; $("#fname").textContent = ""; $("#text").value = SAMPLE; };
+function pickFile(f) { if (!f) return; pickedFile = f; $("#url").value = ""; $("#fname").textContent = `✓ ${f.name} (${(f.size/1024/1024).toFixed(1)} MB)`; }
+$("#sampleBtn").onclick = () => { pickedFile = null; $("#fname").textContent = ""; $("#url").value = ""; $("#text").value = SAMPLE; };
 $("#goBtn").onclick = generate;
 $("#reviewBtn").onclick = () => {
   const q = loadQueue(); if (!q.length) return;
@@ -324,7 +368,7 @@ $("#muteBtn").onclick = () => {
 };
 function backHome() {
   stopAudio(); finished = true;
-  $("#feedWrap").classList.add("hidden"); $("#home").classList.remove("hidden"); renderReview();
+  $("#feedWrap").classList.add("hidden"); $("#home").classList.remove("hidden"); renderReview(); renderLearn();
 }
 
 function setStatus(html, isErr) {
@@ -344,13 +388,13 @@ async function api(path, opts) {
 
 /* ---------------- streaming ingest ---------------- */
 async function generate() {
-  const text = $("#text").value.trim();
-  if (!pickedFile && !text) return setStatus("Add a PDF or paste some text first.", true);
+  const text = $("#text").value.trim(), link = $("#url").value.trim();
+  if (!pickedFile && !text && !link) return setStatus("Add a PDF, a link, or some text first.", true);
   unlockAudio();
   $("#goBtn").disabled = true;
-  setStatus(pickedFile ? "Reading your PDF and pulling its real figures… 📖" : "Reading your text… 📖");
+  setStatus(pickedFile ? "Reading your PDF and pulling its real figures… 📖" : link ? "Opening the link and reading it… 🌐" : "Reading your text… 📖");
   const fd = new FormData();
-  if (pickedFile) fd.append("file", pickedFile); else fd.append("text", text);
+  if (pickedFile) fd.append("file", pickedFile); else if (link) fd.append("url", link); else fd.append("text", text);
   fd.append("n", "8");
   let started = false;
   const start = (d) => { if (!started) { started = true; openFeed({ deck_title: d.deck_title || "Your reading", subject: d.subject || "", concepts: [] }, false); } };
@@ -385,6 +429,7 @@ async function generate() {
 /* ---------------- feed building (progressive) ---------------- */
 function openFeed(d, isReview) {
   deck = d; reviewMode = isReview; finished = false; current = null;
+  hist = isReview ? null : { id: Date.now(), title: d.deck_title, subject: d.subject, date: new Date().toISOString(), quiz: { correct: 0, answered: 0 }, teach: [], next: [] };
   stats = { correct: 0, answered: 0, teach: [] };
   visQ.length = 0;
   feed.innerHTML = ""; feed.scrollTop = 0;
@@ -419,6 +464,7 @@ function introCard() {
 }
 function updateIntro(m) {
   deck.deck_title = m.deck_title || deck.deck_title; deck.subject = m.subject || deck.subject;
+  if (hist) { hist.title = deck.deck_title; hist.subject = deck.subject; saveHist(); }
   const intro = feed.querySelector(".intro");
   if (intro) { $("h2", intro).textContent = deck.deck_title; $(".kicker", intro).textContent = deck.subject; }
 }
@@ -442,6 +488,13 @@ function finishFeed() {
   el.className = "card endcard";
   el.innerHTML = `<div class="kicker" style="color:#86efac">Done</div><div class="endbody"></div>`;
   place(el); renderEnd();
+  if (hist) {
+    saveHist();
+    const weak = loadQueue().map(x => x.concept.title);
+    api("/api/next", { method: "POST", headers: JSON_H, body: JSON.stringify({ deck_title: deck.deck_title, subject: deck.subject || "",
+        concepts: deck.concepts.map(c => c.title), weak }) })
+      .then(r => { hist.next = r.topics; saveHist(); renderEnd(); }).catch(() => {});
+  }
 }
 function updateProgress() {
   if (!current) return;
@@ -605,6 +658,7 @@ function fillQuiz(el, q, c) {
     body.querySelectorAll(".opt")[q.answer_index].classList.add("right");
     if (!ok) b.classList.add("wrong");
     stats.answered++; if (ok) { stats.correct++; removeFromReview(c.title); } else addToReview(c, "missed quiz");
+    if (hist) { hist.quiz.answered++; if (ok) hist.quiz.correct++; saveHist(); }
     $(".feedback", body).innerHTML = (ok ? "✅ Nice. " : `❌ Not quite — added <b>${esc(c.title)}</b> to tomorrow's review. `) + esc(q.explanation);
     renderEnd();
   });
@@ -655,6 +709,7 @@ function setupTeach(el, c) {
         <div class="small">📌 Source p.${esc(r.page)} — “${esc(r.source_quote)}”</div>
         <div class="model-tag">Graded by Gemma 4 against the source only</div></div>`;
       stats.teach.push(r.score);
+      if (hist) { hist.teach.push({ title: c.title, score: r.score, explanation: ta.value.trim(), missed: r.missed }); saveHist(); }
       if (r.score < 70) addToReview(c, "teach-back"); else removeFromReview(c.title);
       renderEnd();
     } catch (e) { out.innerHTML = `<p class="err">⚠️ ${esc(e.message)}</p>`; }
@@ -675,6 +730,7 @@ function renderEnd() {
       ${q.length ? q.map(x => `<div class="review-item"><span>${esc(x.concept.emoji)} ${esc(x.concept.title)}</span><span class="pill">${esc(x.reason)}</span></div>`).join("")
         : `<p class="small">Nothing — you nailed it.</p>`}
     </div>
+    ${hist?.next?.length ? `<div class="panel"><strong>🧭 What to learn next</strong>${hist.next.map(t => `<div class="review-item"><span>${esc(t.topic)}<br><span class="small">${esc(t.why)}</span></span></div>`).join("")}<div class="model-tag">Suggested by Gemma 4 · saved to Your learning</div></div>` : ""}
     <button class="btn" type="button" onclick="document.getElementById('backBtn').click()">Back home</button>`;
 }
 
@@ -869,7 +925,7 @@ function onVisible(entries) {
   });
 }
 
-renderReview();
+renderReview(); renderLearn();
 </script>
 </body>
 </html>

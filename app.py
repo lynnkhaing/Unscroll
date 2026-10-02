@@ -222,11 +222,89 @@ def extract_text(pdf_bytes: bytes, max_chars: int = 120_000) -> str:
     return "\n".join(f"[page {i + 1}]\n{p.get_text()}" for i, p in enumerate(doc))[:max_chars]
 
 
+# ---------- Web links ----------
+
+class _TextGrab(__import__("html.parser").parser.HTMLParser):
+    KEEP = {"p", "h1", "h2", "h3", "h4", "li", "blockquote", "figcaption", "td", "th", "pre"}
+    SKIP = {"script", "style", "nav", "footer", "header", "aside", "form", "noscript", "svg"}
+
+    def __init__(self):
+        super().__init__()
+        self.out, self.stack, self.skip, self.title, self._t = [], [], 0, "", False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self.skip += 1
+        if tag == "title":
+            self._t = True
+        if tag in self.KEEP:
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP and self.skip:
+            self.skip -= 1
+        if tag == "title":
+            self._t = False
+
+    def handle_data(self, data):
+        if self._t:
+            self.title += data
+        elif not self.skip and data.strip():
+            self.out.append(data)
+
+
+def _public_url(url: str) -> bool:
+    import ipaddress, socket
+    u = urllib.parse.urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return False
+    try:
+        for info in socket.getaddrinfo(u.hostname, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def fetch_url(url: str) -> tuple[bytes, str]:
+    if not _public_url(url):
+        raise HTTPException(400, "Please use a public http(s) link.")
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT + " Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=12) as r:
+            if not _public_url(r.geturl()):
+                raise HTTPException(400, "That link redirects somewhere we can't open.")
+            return r.read(MAX_UPLOAD_BYTES), (r.headers.get_content_type() or "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't open that link ({str(e)[:80]}).")
+
+
+def html_to_text(html: bytes) -> tuple[str, str]:
+    g = _TextGrab()
+    g.feed(html.decode("utf-8", errors="ignore"))
+    text = re.sub(r"\n\s*\n+", "\n\n", "".join(g.out)).strip()
+    return " ".join(g.title.split()), text[:120_000]
+
+
 @app.post("/api/ingest")
-async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: int = Form(8)):
+async def ingest(file: UploadFile | None = File(None), text: str = Form(""), url: str = Form(""), n: int = Form(8)):
     n = max(3, min(n, 12))
     parts: list = []
     figures: list[dict] = []
+    if url.strip() and not (file is not None and file.filename):
+        data, ctype = await asyncio.to_thread(fetch_url, url.strip())
+        if ctype == "application/pdf" or data[:4] == b"%PDF":
+            figures = await asyncio.to_thread(extract_figures, data)
+            text = await asyncio.to_thread(extract_text, data)
+        else:
+            title, body = await asyncio.to_thread(html_to_text, data)
+            text = f"{title}\n(Source: {url.strip()})\n\n{body}"
+        if len(text.strip()) < 200:
+            raise HTTPException(400, "Couldn't find enough readable text at that link.")
     if file is not None and file.filename:
         data = await file.read()
         if len(data) > MAX_UPLOAD_BYTES:
@@ -855,6 +933,25 @@ Return ONLY JSON: {{"score": int 0-100, "verdict": "nailed it" | "almost" | "not
         "source_quote": c.source_quote,
         "model": TUTOR_MODEL,
     }
+
+
+class NextReq(BaseModel):
+    deck_title: str
+    subject: str = ""
+    concepts: list[str]
+    weak: list[str] = []
+
+
+@app.post("/api/next")
+def next_topics(req: NextReq):
+    prompt = f"""TASK: next_topics
+A student just studied "{req.deck_title}" ({req.subject}). Concepts: {"; ".join(req.concepts[:12])}.
+They struggled with: {"; ".join(req.weak[:6]) or "nothing in particular"}.
+Suggest 3 topics to learn next: one to shore up a weak spot (if any), and two natural next steps.
+Return ONLY JSON: {{"topics": [{{"topic": str (2-6 words), "why": str (max 14 words)}}]}}"""
+    out = ask_gemma(prompt)
+    topics = [t for t in (out.get("topics") or out.get("items") or []) if isinstance(t, dict) and t.get("topic")][:3]
+    return {"topics": [{"topic": str(t["topic"])[:60], "why": str(t.get("why", ""))[:120]} for t in topics], "model": TUTOR_MODEL}
 
 
 @app.get("/api/health")

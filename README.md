@@ -14,7 +14,7 @@ At San Francisco State University, most students commute, many are first-generat
 
 ## How it works
 ```
-PDF / photo / text
+PDF / photo / text / web link (public URLs only; private/internal addresses are blocked)
    │  PyMuPDF: page text + crops the reading's REAL captioned figures
    ▼
 Gemini Flash (streamed JSON Lines) ── first reel on screen in ~3 s, the rest stream in behind it
@@ -34,7 +34,9 @@ Video reel (browser) ── animated scenes (Ken Burns image, count-up stat, bui
    ├─ Voice:   Gemini TTS streamed as raw PCM → Web Audio (first sound in ~1 s), next reel prefetched
    ├─ Gemma 4 /api/quiz       → recall MCQs between reels
    ├─ Gemma 4 /api/teachback  → grades the student's typed or spoken explanation ONLY against the source
-   └─ Review queue            → missed concepts are due again tomorrow
+   ├─ Review queue            → missed concepts are due again tomorrow
+   └─ Your learning           → topics, scores, your own explanations, and Gemma 4's
+                                "what to learn next" (saved on-device; account sync is on the roadmap)
 ```
 
 ## Models (open-weight + Gemini)
