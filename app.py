@@ -4,6 +4,7 @@ Gemini Flash digests the reading (multimodal PDF -> concept reels).
 Gemma 4 (open-weight, via the Gemini API) is the tutor: quizzes + teach-back grading.
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
@@ -155,13 +156,36 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
             parts.append(data.decode("utf-8", errors="ignore"))
         else:
             parts.append(types.Part.from_bytes(data=data, mime_type=mime))
-    elif text.strip():
+    elif len(text.strip()) >= 200:
         parts.append(f"SOURCE TEXT:\n{text.strip()}")
     else:
-        raise HTTPException(400, "Upload a file or paste some text.")
+        raise HTTPException(400, "Upload a file or paste at least a paragraph of text.")
 
     fig_list = "\n".join(f"- {f['id']} (p.{f['page']}): {f['caption']}" for f in figures) or "(none)"
     parts.append(DIGEST_PROMPT.format(n=n, figures=fig_list))
+    return StreamingResponse(_heartbeat(asyncio.to_thread(digest, parts, figures)),
+                             media_type="application/json")
+
+
+async def _heartbeat(work):
+    """Some browsers (Safari) drop a fetch that is silent for ~60s. Gemini can take longer on a
+    big PDF, so we stream whitespace every few seconds (valid leading JSON whitespace) and then
+    the result. Errors come back as {"detail": ...} in the body."""
+    task = asyncio.ensure_future(work)
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=5)
+        if done:
+            break
+        yield " "
+    try:
+        yield json.dumps(task.result())
+    except HTTPException as e:
+        yield json.dumps({"detail": e.detail, "error": True})
+    except Exception as e:
+        yield json.dumps({"detail": f"Unexpected error: {e}", "error": True})
+
+
+def digest(parts: list, figures: list[dict]) -> dict:
     resp, errors = None, []
     for model in DIGEST_FALLBACKS:
         try:

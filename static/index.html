@@ -225,7 +225,7 @@ function setStatus(html, isErr) {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail || `Request failed (${r.status})`);
+  if (!r.ok || j.error) throw new Error(j.detail || `Request failed (${r.status})`);
   return j;
 }
 
@@ -235,9 +235,9 @@ async function generate() {
   // Unlock speech synthesis while we still have the user gesture.
   try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch {}
   $("#goBtn").disabled = true;
-  const msgs = ["Gemini is reading your reading… 📖", "Finding the big ideas… 💡", "Writing your reels… 🎬", "Almost there… ✨"];
+  const msgs = ["Uploading… 📤", "Gemini is reading your reading… 📖", "Pulling the real figures from your PDF… 🖼️", "Finding the big ideas… 💡", "Writing your reels… 🎬", "Matching figures to concepts… 🧩", "Almost there… ✨", "Big reading! Still working… ⏳"];
   let i = 0; setStatus(msgs[0]);
-  const t = setInterval(() => setStatus(msgs[Math.min(++i, msgs.length - 1)]), 4000);
+  const t = setInterval(() => setStatus(msgs[Math.min(++i, msgs.length - 1)]), 7000);
   try {
     const fd = new FormData();
     if (pickedFile) fd.append("file", pickedFile); else fd.append("text", text);
