@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Unscroll</title>
+<meta name="description" content="Turn assigned readings into a swipeable learn-feed.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌀</text></svg>">
+<style>
+  :root {
+    --bg: #0b0b10; --fg: #f5f5f7; --muted: #a1a1aa; --card: #17171f; --line: #2a2a35;
+    --accent: #7c5cff; --good: #22c55e; --mid: #f59e0b; --bad: #ef4444;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  /* ---------- Home ---------- */
+  #home { max-width: 560px; margin: 0 auto; padding: 32px 16px 64px; }
+  .brand { font-size: 40px; font-weight: 800; letter-spacing: -1px; margin: 8px 0 0; }
+  .brand span { background: linear-gradient(90deg, #7c5cff, #ff5ca8, #ffb35c);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .tag { color: var(--muted); margin: 4px 0 24px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 14px; padding: 28px 12px; text-align: center;
+    color: var(--muted); transition: .15s; }
+  .drop.over { border-color: var(--accent); color: var(--fg); }
+  .drop strong { color: var(--fg); }
+  textarea { width: 100%; min-height: 110px; background: #0f0f15; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 12px; padding: 12px; font: inherit; resize: vertical; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { background: var(--accent); color: white; border: 0; border-radius: 999px; padding: 12px 20px; font-weight: 700; }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--fg); }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .small { font-size: 13px; color: var(--muted); }
+  .or { text-align: center; color: var(--muted); margin: 12px 0; font-size: 13px; }
+  .review-item { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .review-item:first-of-type { border-top: 0; }
+  .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: #2a2340; color: #c9bcff; white-space: nowrap; }
+  .loading { display: flex; gap: 12px; align-items: center; color: var(--muted); }
+  .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--line);
+    border-top-color: var(--accent); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .err { color: #fca5a5; margin-top: 10px; }
+
+  /* ---------- Feed ---------- */
+  #feed { position: fixed; inset: 0; overflow-y: scroll; scroll-snap-type: y mandatory; background: #000; }
+  .card { height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; position: relative;
+    display: flex; flex-direction: column; justify-content: center; padding: 72px 22px 96px;
+    max-width: 520px; margin: 0 auto; overflow: hidden; }
+  .reel { color: white; padding-right: 84px; }
+  .reel .cite { margin-right: -60px; }
+  .reel .bgfx { position: absolute; inset: 0; z-index: 0; }
+  .reel > *:not(.bgfx) { position: relative; z-index: 1; }
+  .emoji { font-size: 88px; line-height: 1; margin-bottom: 18px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.35));
+    animation: bob 3s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(-8px) rotate(-4deg); } }
+  .reel h2 { font-size: 32px; line-height: 1.1; margin: 0 0 16px; letter-spacing: -.5px; }
+  .caption { font-size: 21px; line-height: 1.45; font-weight: 600; text-shadow: 0 2px 10px rgba(0,0,0,.4); }
+  .caption .w { opacity: .55; transition: opacity .12s; }
+  .caption .w.on { opacity: 1; }
+  .caption.static .w { opacity: 1; }
+  .cite { margin-top: 18px; font-size: 13px; background: rgba(0,0,0,.28); border-radius: 12px; padding: 8px 12px; }
+  .side { position: absolute; right: 14px; top: 38%; display: flex; flex-direction: column; gap: 14px; z-index: 2; }
+  .side button { width: 52px; height: 52px; border-radius: 50%; border: 0; background: rgba(0,0,0,.35);
+    color: white; font-size: 22px; backdrop-filter: blur(6px); }
+  .topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; justify-content: space-between;
+    align-items: center; padding: 12px 14px; pointer-events: none; }
+  .topbar > * { pointer-events: auto; }
+  .topbar .btn { padding: 8px 14px; font-size: 14px; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); }
+  .progress { position: fixed; top: 0; left: 0; height: 3px; background: white; z-index: 11; transition: width .2s; }
+  .kicker { font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; opacity: .85; margin-bottom: 10px; font-weight: 700; }
+  .swipe-hint { position: absolute; bottom: 28px; left: 0; right: 0; text-align: center; font-size: 13px; opacity: .7;
+    animation: hint 1.6s ease-in-out infinite; }
+  @keyframes hint { 50% { transform: translateY(-6px); } }
+
+  .quiz, .teach, .endcard { background: var(--bg); }
+  .quiz h3, .teach h3 { font-size: 24px; line-height: 1.25; margin: 0 0 18px; }
+  .opt { display: block; width: 100%; text-align: left; background: var(--card); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; font-size: 17px; }
+  .opt.right { border-color: var(--good); background: #10291a; }
+  .opt.wrong { border-color: var(--bad); background: #2c1212; }
+  .feedback { margin-top: 8px; color: var(--muted); font-size: 15px; }
+  .teach textarea { min-height: 140px; font-size: 17px; }
+  .result { margin-top: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; font-size: 15px; }
+  .score { font-size: 34px; font-weight: 800; }
+  .result ul { margin: 6px 0 10px; padding-left: 20px; }
+  .result h4 { margin: 8px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .model-tag { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .big-stat { font-size: 56px; font-weight: 800; line-height: 1; }
+  @media (prefers-reduced-motion: reduce) { .emoji, .swipe-hint, .spinner { animation: none; } }
+</style>
+</head>
+<body>
+
+<!-- ================= HOME ================= -->
+<main id="home">
+  <h1 class="brand">🌀 <span>Unscroll</span></h1>
+  <p class="tag">Your assigned reading, as a feed you can actually finish and remember.</p>
+
+  <section class="panel">
+    <div id="drop" class="drop">
+      <div style="font-size:34px">📄</div>
+      <strong>Drop a PDF reading here</strong><br>
+      <span class="small">or a photo of a textbook page · up to 20 MB</span><br><br>
+      <label class="btn ghost" style="display:inline-block">Choose file
+        <input id="file" type="file" accept="application/pdf,image/*,text/plain" hidden>
+      </label>
+      <div id="fname" class="small" style="margin-top:8px"></div>
+    </div>
+    <div class="or">— or paste text —</div>
+    <textarea id="text" placeholder="Paste an article, chapter, or lecture notes…"></textarea>
+    <div class="row" style="margin-top:12px; justify-content:space-between">
+      <button class="btn ghost" id="sampleBtn" type="button">Use sample reading</button>
+      <button class="btn" id="goBtn" type="button">Unscroll it →</button>
+    </div>
+    <div id="status" class="hidden" style="margin-top:14px"></div>
+  </section>
+
+  <section class="panel" id="reviewPanel">
+    <div class="row" style="justify-content:space-between; margin-bottom:6px">
+      <strong>🔁 Review queue</strong>
+      <button class="btn ghost hidden" id="reviewBtn" type="button" style="padding:6px 14px">Review now</button>
+    </div>
+    <div id="reviewList" class="small">Nothing to review yet. Concepts you miss will come back here.</div>
+  </section>
+
+  <p class="small">Digest: Gemini 2.5 Flash · Tutor: Gemma 4 (open-weight) · Your uploads are processed in memory and not stored.</p>
+</main>
+
+<!-- ================= FEED ================= -->
+<div id="feedWrap" class="hidden">
+  <div class="progress" id="progress"></div>
+  <div class="topbar">
+    <button class="btn" id="backBtn" type="button">← Home</button>
+    <button class="btn" id="muteBtn" type="button" aria-pressed="false">🔊 Sound on</button>
+  </div>
+  <div id="feed" tabindex="0" aria-label="Learning feed"></div>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const GRADIENTS = [
+  ["#7c3aed","#db2777"], ["#0ea5e9","#6366f1"], ["#f97316","#e11d48"], ["#10b981","#0e7490"],
+  ["#eab308","#ea580c"], ["#8b5cf6","#0ea5e9"], ["#ec4899","#f59e0b"], ["#14b8a6","#4f46e5"],
+];
+const SAMPLE = `The Bystander Effect (Intro to Social Psychology, Ch. 4)
+
+In 1964, Kitty Genovese was attacked outside her apartment in New York City. Early news reports claimed that 38 neighbors witnessed the attack and none intervened. Later investigations showed the reports were exaggerated, but the story inspired psychologists John Darley and Bibb Latané to study why people fail to help in emergencies.
+
+Darley and Latané (1968) ran an experiment in which participants believed they were talking over an intercom with other students when one of them appeared to have a seizure. When participants thought they were the only witness, 85% sought help before the seizure ended. When they believed four other people were listening, only 31% did. This pattern is called the bystander effect: the more people present, the less likely any one person is to help.
+
+Two processes explain it. Diffusion of responsibility means each person feels less personally responsible because responsibility is shared across the group. Pluralistic ignorance happens when people look to others to decide whether a situation is an emergency; if everyone appears calm, each person concludes that nothing is wrong, even when they privately feel concerned.
+
+Latané and Darley proposed a five-step decision model of helping: notice the event, interpret it as an emergency, assume responsibility, know how to help, and decide to help. Failure at any step means no help is given. For example, people in a hurry are less likely to even notice someone in need, as shown in the Good Samaritan study by Darley and Batson (1973), where seminary students rushing to give a talk often passed by a person slumped in a doorway.
+
+The effect can be reduced. Singling out one person ("You in the red jacket, call 911") removes diffusion of responsibility. Knowing about the bystander effect itself also makes people more likely to help. Training such as first aid courses increases the "know how to help" step. Group cohesion matters too: people help more when bystanders are friends rather than strangers.`;
+
+let deck = null, items = [], quizzes = [], muted = false, stats = { correct: 0, answered: 0, teach: [] };
+
+/* ---------------- storage (review queue) ---------------- */
+function loadQueue() { try { return JSON.parse(localStorage.getItem("unscroll.review") || "[]"); } catch { return []; } }
+function saveQueue(q) { try { localStorage.setItem("unscroll.review", JSON.stringify(q)); } catch {} }
+function addToReview(concept, reason) {
+  const q = loadQueue().filter(x => x.concept.title !== concept.title);
+  const due = new Date(); due.setDate(due.getDate() + 1); due.setHours(0,0,0,0);
+  q.push({ concept, reason, deck: deck?.deck_title || "", due: due.toISOString() });
+  saveQueue(q);
+}
+function removeFromReview(title) { saveQueue(loadQueue().filter(x => x.concept.title !== title)); }
+function renderReview() {
+  const q = loadQueue(), list = $("#reviewList"), btn = $("#reviewBtn");
+  if (!q.length) { list.textContent = "Nothing to review yet. Concepts you miss will come back here."; btn.classList.add("hidden"); return; }
+  const now = Date.now();
+  list.innerHTML = q.map(x => {
+    const d = new Date(x.due), isDue = d.getTime() <= now;
+    return `<div class="review-item"><span>${esc(x.concept.emoji)} ${esc(x.concept.title)} <span class="small">· ${esc(x.deck)}</span></span>
+      <span class="pill">${isDue ? "Due now" : "Due tomorrow"}</span></div>`;
+  }).join("");
+  btn.classList.remove("hidden");
+}
+
+/* ---------------- home ---------------- */
+let pickedFile = null;
+const drop = $("#drop");
+$("#file").addEventListener("change", e => pickFile(e.target.files[0]));
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => pickFile(e.dataTransfer.files[0]));
+function pickFile(f) { if (!f) return; pickedFile = f; $("#fname").textContent = `✓ ${f.name} (${(f.size/1024/1024).toFixed(1)} MB)`; }
+$("#sampleBtn").onclick = () => { pickedFile = null; $("#fname").textContent = ""; $("#text").value = SAMPLE; };
+$("#goBtn").onclick = generate;
+$("#reviewBtn").onclick = () => {
+  const q = loadQueue(); if (!q.length) return;
+  deck = { deck_title: "Review", subject: "Spaced review", concepts: q.map(x => x.concept) };
+  startFeed(true);
+};
+$("#backBtn").onclick = () => { speechSynthesis.cancel(); $("#feedWrap").classList.add("hidden"); $("#home").classList.remove("hidden"); renderReview(); };
+$("#muteBtn").onclick = () => {
+  muted = !muted; $("#muteBtn").textContent = muted ? "🔇 Muted" : "🔊 Sound on";
+  $("#muteBtn").setAttribute("aria-pressed", muted); if (muted) speechSynthesis.cancel(); else playCurrent();
+};
+
+function setStatus(html, isErr) {
+  const s = $("#status"); s.classList.remove("hidden");
+  s.innerHTML = isErr ? `<div class="err">⚠️ ${esc(html)}</div>` : `<div class="loading"><div class="spinner"></div><span>${html}</span></div>`;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || `Request failed (${r.status})`);
+  return j;
+}
+
+async function generate() {
+  const text = $("#text").value.trim();
+  if (!pickedFile && !text) return setStatus("Add a PDF or paste some text first.", true);
+  // Unlock speech synthesis while we still have the user gesture.
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch {}
+  $("#goBtn").disabled = true;
+  const msgs = ["Gemini is reading your reading… 📖", "Finding the big ideas… 💡", "Writing your reels… 🎬", "Almost there… ✨"];
+  let i = 0; setStatus(msgs[0]);
+  const t = setInterval(() => setStatus(msgs[Math.min(++i, msgs.length - 1)]), 4000);
+  try {
+    const fd = new FormData();
+    if (pickedFile) fd.append("file", pickedFile); else fd.append("text", text);
+    fd.append("n", "8");
+    deck = await api("/api/ingest", { method: "POST", body: fd });
+    clearInterval(t);
+    startFeed(false);
+  } catch (e) {
+    clearInterval(t); setStatus(e.message, true);
+  } finally { $("#goBtn").disabled = false; }
+}
+
+/* ---------------- feed ---------------- */
+function startFeed(isReview) {
+  stats = { correct: 0, answered: 0, teach: [] };
+  quizzes = [];
+  // Layout: R R Q R T R R Q R T ... — quiz after every 2 reels, teach-back every 4th.
+  items = [{ type: "intro", isReview }];
+  deck.concepts.forEach((c, i) => {
+    items.push({ type: "reel", i });
+    if (i % 2 === 1) items.push({ type: "quiz", i: i - 1 + (i % 4 === 1 ? 0 : 1) });
+    if (i % 4 === 2 || (isReview && deck.concepts.length < 3)) items.push({ type: "teach", i });
+  });
+  items.push({ type: "end" });
+  $("#home").classList.add("hidden"); $("#status").classList.add("hidden");
+  $("#feedWrap").classList.remove("hidden");
+  renderFeed();
+  // Quizzes come from Gemma in the background while the student watches the first reels.
+  api("/api/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concepts: deck.concepts }) })
+    .then(r => { quizzes = r.questions; document.querySelectorAll(".quiz").forEach(fillQuiz); })
+    .catch(e => document.querySelectorAll(".quiz .qbody").forEach(el => el.innerHTML = `<p class="err">Couldn't load quiz: ${esc(e.message)}</p>`));
+}
+
+function renderFeed() {
+  const feed = $("#feed"); feed.innerHTML = ""; feed.scrollTop = 0;
+  items.forEach((it, idx) => {
+    const el = document.createElement("section"); el.className = "card"; el.dataset.idx = idx;
+    if (it.type === "intro") {
+      const [a, b] = GRADIENTS[0];
+      el.classList.add("reel");
+      el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
+        <div class="kicker">${it.isReview ? "Spaced review" : esc(deck.subject)}</div>
+        <div class="emoji">🌀</div>
+        <h2>${esc(deck.deck_title)}</h2>
+        <div class="caption static">${deck.concepts.length} ideas · ~${Math.ceil(deck.concepts.length * 0.6)} min · quizzes along the way.</div>
+        <div class="swipe-hint">swipe up ↑</div>`;
+    } else if (it.type === "reel") {
+      const c = deck.concepts[it.i], [a, b] = GRADIENTS[(it.i + 1) % GRADIENTS.length];
+      el.classList.add("reel"); el.dataset.reel = it.i;
+      const words = c.script.split(/\s+/).map((w, k) => `<span class="w" data-k="${k}">${esc(w)}</span>`).join(" ");
+      el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
+        <div class="kicker">${it.i + 1} / ${deck.concepts.length}</div>
+        <div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>
+        <h2>${esc(c.title)}</h2>
+        <div class="caption">${words}</div>
+        <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
+        <div class="side">
+          <button type="button" class="replay" aria-label="Replay narration">↻</button>
+          <button type="button" class="save" aria-label="Save to review queue">🔖</button>
+        </div>`;
+      $(".replay", el).onclick = () => speakReel(el, c, true);
+      $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
+    } else if (it.type === "quiz") {
+      el.classList.add("quiz"); el.dataset.ci = it.i;
+      el.innerHTML = `<div class="kicker" style="color:#c9bcff">⚡ Quick check</div>
+        <div class="qbody"><div class="loading"><div class="spinner"></div><span>Gemma is writing your question…</span></div></div>`;
+      if (quizzes.length) fillQuiz(el);
+    } else if (it.type === "teach") {
+      const c = deck.concepts[it.i];
+      el.classList.add("teach");
+      el.innerHTML = `<div class="kicker" style="color:#ffb35c">🎤 Teach it back</div>
+        <h3>Explain <em>${esc(c.title)}</em> like you're telling a friend.</h3>
+        <textarea placeholder="Type, or tap 🎙️ and say it out loud…" aria-label="Your explanation"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="btn ghost mic" type="button">🎙️ Speak</button>
+          <button class="btn check" type="button">Check me</button>
+        </div>
+        <div class="out"></div>`;
+      setupTeach(el, c);
+    } else {
+      el.classList.add("endcard");
+      el.innerHTML = `<div class="kicker" style="color:#86efac">Done</div><div class="endbody"></div>`;
+    }
+    feed.appendChild(el);
+  });
+  observe();
+}
+
+function fillQuiz(el) {
+  const ci = +el.dataset.ci;
+  const q = quizzes.find(x => x.concept_index === ci) || quizzes[ci];
+  const body = $(".qbody", el);
+  if (!q) { body.innerHTML = `<p class="small">No question for this one — keep scrolling.</p>`; return; }
+  if (body.dataset.filled) return; body.dataset.filled = "1";
+  body.innerHTML = `<h3>${esc(q.question)}</h3>` +
+    q.options.map((o, k) => `<button type="button" class="opt" data-k="${k}">${"ABCD"[k]}. ${esc(o)}</button>`).join("") +
+    `<div class="feedback"></div><div class="model-tag">Question by Gemma 4</div>`;
+  body.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+    if (body.dataset.done) return; body.dataset.done = "1";
+    const k = +b.dataset.k, ok = k === q.answer_index, c = deck.concepts[ci];
+    body.querySelectorAll(".opt")[q.answer_index].classList.add("right");
+    if (!ok) b.classList.add("wrong");
+    stats.answered++; if (ok) { stats.correct++; removeFromReview(c.title); } else addToReview(c, "missed quiz");
+    $(".feedback", body).innerHTML = (ok ? "✅ Nice. " : `❌ Not quite — added <b>${esc(c.title)}</b> to tomorrow's review. `) + esc(q.explanation);
+    renderEnd();
+  });
+}
+
+function setupTeach(el, c) {
+  const ta = $("textarea", el), mic = $(".mic", el), out = $(".out", el);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) mic.classList.add("hidden");
+  let rec = null;
+  mic.onclick = () => {
+    if (rec) { rec.stop(); return; }
+    speechSynthesis.cancel();
+    rec = new SR(); rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
+    const base = ta.value ? ta.value + " " : "";
+    rec.onresult = e => { ta.value = base + Array.from(e.results).map(r => r[0].transcript).join(" "); };
+    rec.onend = () => { rec = null; mic.textContent = "🎙️ Speak"; };
+    rec.onerror = () => { rec = null; mic.textContent = "🎙️ Speak"; };
+    rec.start(); mic.textContent = "⏹ Stop";
+  };
+  $(".check", el).onclick = async () => {
+    if (rec) rec.stop();
+    const btn = $(".check", el); btn.disabled = true;
+    out.innerHTML = `<div class="loading" style="margin-top:12px"><div class="spinner"></div><span>Gemma is grading against the source…</span></div>`;
+    try {
+      const r = await api("/api/teachback", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: c, explanation: ta.value }) });
+      const color = r.score >= 80 ? "var(--good)" : r.score >= 50 ? "var(--mid)" : "var(--bad)";
+      const li = a => a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+      out.innerHTML = `<div class="result">
+        <div class="score" style="color:${color}">${r.score}/100 · ${esc(r.verdict)}</div>
+        ${r.got_right.length ? `<h4>✅ You got</h4>${li(r.got_right)}` : ""}
+        ${r.missed.length ? `<h4>🧩 You missed</h4>${li(r.missed)}` : ""}
+        ${r.misconceptions.length ? `<h4>⚠️ Careful</h4>${li(r.misconceptions)}` : ""}
+        ${r.tip ? `<p>💡 ${esc(r.tip)}</p>` : ""}
+        <div class="small">📌 Source p.${esc(r.page)} — “${esc(r.source_quote)}”</div>
+        <div class="model-tag">Graded by Gemma 4 against the source only</div></div>`;
+      stats.teach.push(r.score);
+      if (r.score < 70) addToReview(c, "teach-back"); else removeFromReview(c.title);
+      renderEnd();
+    } catch (e) { out.innerHTML = `<p class="err">⚠️ ${esc(e.message)}</p>`; }
+    finally { btn.disabled = false; }
+  };
+}
+
+function renderEnd() {
+  const el = $(".endcard .endbody"); if (!el) return;
+  const q = loadQueue();
+  const pct = stats.answered ? Math.round(100 * stats.correct / stats.answered) : null;
+  const tb = stats.teach.length ? Math.round(stats.teach.reduce((a, b) => a + b, 0) / stats.teach.length) : null;
+  el.innerHTML = `<h3 style="font-size:28px;margin:0 0 18px">You finished the reading. 🎉</h3>
+    <div class="row" style="gap:28px;margin-bottom:18px">
+      <div><div class="big-stat">${pct ?? "–"}${pct != null ? "%" : ""}</div><div class="small">quiz recall</div></div>
+      <div><div class="big-stat">${tb ?? "–"}</div><div class="small">teach-back score</div></div>
+    </div>
+    <div class="panel"><strong>🔁 Coming back tomorrow</strong>
+      ${q.length ? q.map(x => `<div class="review-item"><span>${esc(x.concept.emoji)} ${esc(x.concept.title)}</span><span class="pill">${esc(x.reason)}</span></div>`).join("")
+        : `<p class="small">Nothing — you nailed it.</p>`}
+    </div>
+    <button class="btn" type="button" onclick="document.getElementById('backBtn').click()">Back home</button>`;
+}
+
+/* ---------------- narration + scroll tracking ---------------- */
+let current = null;
+function observe() {
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      current = e.target;
+      const idx = +current.dataset.idx;
+      $("#progress").style.width = `${(100 * (idx + 1)) / items.length}%`;
+      if (current.classList.contains("endcard")) renderEnd();
+      playCurrent();
+    });
+  }, { root: $("#feed"), threshold: 0.6 });
+  document.querySelectorAll("#feed .card").forEach(c => io.observe(c));
+}
+function playCurrent() {
+  speechSynthesis.cancel();
+  if (!current || current.dataset.reel === undefined) return;
+  if (muted) { current.querySelector(".caption").classList.add("static"); return; }
+  const c = deck.concepts[+current.dataset.reel];
+  speakReel(current, c, false);
+}
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
+  return vs.find(v => /Samantha|Google US English|Aria|Jenny/i.test(v.name)) || vs[0];
+}
+function speakReel(el, c, force) {
+  if (muted && !force) return;
+  speechSynthesis.cancel();
+  const words = el.querySelectorAll(".caption .w");
+  words.forEach(w => w.classList.remove("on"));
+  const text = `${c.title}. ${c.script}`;
+  const u = new SpeechSynthesisUtterance(text);
+  const v = pickVoice(); if (v) u.voice = v;
+  u.rate = 1.05;
+  // Map character offsets back to caption words for karaoke-style highlighting.
+  const offset = c.title.length + 2, starts = []; let pos = 0;
+  c.script.split(/\s+/).forEach(w => { const at = c.script.indexOf(w, pos); starts.push(at); pos = at + w.length; });
+  u.onboundary = e => {
+    const ci = e.charIndex - offset; if (ci < 0) return;
+    let k = starts.findIndex((s, j) => ci >= s && (j === starts.length - 1 || ci < starts[j + 1]));
+    for (let j = 0; j <= k; j++) words[j]?.classList.add("on");
+  };
+  u.onend = () => words.forEach(w => w.classList.add("on"));
+  speechSynthesis.speak(u);
+  // If the browser has no boundary events, just show the whole caption.
+  setTimeout(() => { if (!el.querySelector(".w.on")) el.querySelector(".caption").classList.add("static"); }, 2500);
+}
+speechSynthesis.onvoiceschanged = () => {};
+
+renderReview();
+</script>
+</body>
+</html>
