@@ -31,7 +31,7 @@ from pydantic import BaseModel
 DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-3.1-flash-lite")
 # If the primary model is overloaded (503/429), fall back so a live demo never dead-ends.
 DIGEST_FALLBACKS = [DIGEST_MODEL] + [m for m in os.environ.get(
-    "DIGEST_FALLBACKS", "gemini-3.8-flash,gemini-3.5-flash,gemini-flash-latest").split(",") if m and m != DIGEST_MODEL]
+    "DIGEST_FALLBACKS", "gemini-3.5-flash,gemini-3.8-flash,gemini-flash-latest").split(",") if m and m != DIGEST_MODEL]
 TUTOR_MODEL = os.environ.get("TUTOR_MODEL", "gemma-4-26b-a4b-it")
 TTS_MODEL = os.environ.get("TTS_MODEL", "gemini-3.8-flash-tts")
 TTS_VOICE = os.environ.get("TTS_VOICE", "Puck")
@@ -278,12 +278,15 @@ def _digest_worker(parts, figures, n, put, source=""):
     used: set[str] = set()
     sent = 0
     errors = []
-    for model in DIGEST_FALLBACKS:
+    # Vertex AI (paid via Cloud credits) answers in ~1s; the free-tier API key can be deprioritized
+    # under load, so it's the fallback.
+    routes = [(vertex, m) for m in DIGEST_FALLBACKS[:2]] + [(client, m) for m in DIGEST_FALLBACKS]
+    for make, model in routes:
         for thinking in (types.ThinkingConfig(thinking_level="low"), None):
             try:
                 buf, deck_sent = "", False
                 cfg = types.GenerateContentConfig(temperature=0.4, thinking_config=thinking)
-                for chunk in client().models.generate_content_stream(model=model, contents=parts, config=cfg):
+                for chunk in make().models.generate_content_stream(model=model, contents=parts, config=cfg):
                     if os.environ.get("DEBUG_RAW"):
                         print("RAW", model, repr((chunk.text or "")[:120]), flush=True)
                     buf += chunk.text or ""
@@ -303,7 +306,7 @@ def _digest_worker(parts, figures, n, put, source=""):
                             if c:
                                 if sent == 0 and not deck_sent:
                                     put({"type": "deck", "deck_title": "Your reading", "subject": "",
-                                         "model": model, "figures_found": len(figures)})
+                                         "model": f"{make.__name__}:{model}", "figures_found": len(figures)})
                                     deck_sent = True
                                 put({"type": "concept", "index": sent, "concept": c})
                                 sent += 1
@@ -328,6 +331,7 @@ def _digest_worker(parts, figures, n, put, source=""):
                 if thinking is not None and "hinking" in msg:
                     continue  # model doesn't support thinking_level; retry without it
                 errors.append(f"{model}: {msg[:120]}")
+                print("digest error", make.__name__, model, msg[:200], flush=True)
                 break
     put({"type": "error", "detail": "Gemini is busy right now, please retry. " + " | ".join(errors)})
     put(None)
