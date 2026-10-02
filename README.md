@@ -34,7 +34,7 @@ Swipe feed (scroll-snap) ── narrated reels + original figures + karaoke capt
 ## Models (open-weight + Gemini)
 | Role | Model | Access | License / terms |
 |---|---|---|---|
-| Digest (multimodal PDF → concepts) | `gemini-3.8-flash` | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
+| Digest (multimodal PDF → concepts) | `gemini-3.8-flash` (auto-fallback: 3.5-flash → flash-latest → 3.1-flash-lite when overloaded) | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
 | Tutor (quiz + teach-back grading) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
 
 Why we split it this way: Gemini handles the heavy multimodal reading once per document. Gemma 4 is the open-weight tutor that runs on every student interaction. Because Gemma's weights are open, the tutor can run **on-device or on SFSU infrastructure** (for example through Ollama), so students' answers never have to leave campus. To swap models, set `TUTOR_MODEL` / `DIGEST_MODEL`.

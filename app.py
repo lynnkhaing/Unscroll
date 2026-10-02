@@ -19,6 +19,9 @@ from google.genai import types
 from pydantic import BaseModel
 
 DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-3.8-flash")
+# If the primary model is overloaded (503/429), fall back so a live demo never dead-ends.
+DIGEST_FALLBACKS = [DIGEST_MODEL] + [m for m in os.environ.get(
+    "DIGEST_FALLBACKS", "gemini-3.5-flash,gemini-flash-latest,gemini-3.1-flash-lite").split(",") if m and m != DIGEST_MODEL]
 TUTOR_MODEL = os.environ.get("TUTOR_MODEL", "gemma-4-26b-a4b-it")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 SKILL_PATH = Path(__file__).parent / "skills" / "unscroll-tutor" / "SKILL.md"
@@ -159,20 +162,26 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
 
     fig_list = "\n".join(f"- {f['id']} (p.{f['page']}): {f['caption']}" for f in figures) or "(none)"
     parts.append(DIGEST_PROMPT.format(n=n, figures=fig_list))
-    try:
-        resp = client().models.generate_content(
-            model=DIGEST_MODEL,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=Deck,
-                temperature=0.4,
-            ),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:  # surface model errors to the UI
-        raise HTTPException(502, f"Gemini error: {e}")
+    resp, errors = None, []
+    for model in DIGEST_FALLBACKS:
+        try:
+            resp = client().models.generate_content(
+                model=model,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=Deck,
+                    temperature=0.4,
+                    http_options=types.HttpOptions(timeout=90_000, retry_options=types.HttpRetryOptions(attempts=1)),
+                ),
+            )
+            break
+        except HTTPException:
+            raise
+        except Exception as e:
+            errors.append(f"{model}: {str(e)[:120]}")
+    if resp is None:  # surface model errors to the UI
+        raise HTTPException(502, "Gemini is busy right now, please retry. " + " | ".join(errors))
     deck = resp.parsed if isinstance(resp.parsed, Deck) else Deck.model_validate_json(resp.text)
     out = deck.model_dump()
     by_id = {f["id"]: f for f in figures}
@@ -183,6 +192,7 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
             used.add(f["id"])
             c["figure"] = {k: f[k] for k in ("page", "caption", "data_url")}
     out["figures_found"] = len(figures)
+    out["digest_model"] = model
     return out
 
 
