@@ -43,7 +43,7 @@ Video reel (browser) ── animated scenes (Ken Burns image, count-up stat, bui
 | Role | Model | Access | License / terms |
 |---|---|---|---|
 | Digest + storyboard (streamed) | `gemini-3.1-flash-lite` (auto-fallback: 3.8-flash → 3.5-flash → flash-latest when overloaded) | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
-| Tutor (quiz, teach-back grading, image-fit judge) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight, multimodal) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
+| Tutor (quiz, Socratic teach-back grading, Wikimedia image-fit judge, "learn next" topics) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight, multimodal) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
 | Narration | `gemini-3.8-flash-tts` (streamed) | Vertex AI → Gemini API fallback | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
 | Illustrations (only when no real image fits) | `gemini-3.1-flash-image` / `gemini-2.5-flash-image` | Vertex AI (rotated across regions) | [Google Cloud terms](https://cloud.google.com/terms) |
 
