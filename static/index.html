@@ -55,7 +55,7 @@
   .reel { color: white; padding-right: 84px; }
 
   .reel .bgfx { position: absolute; inset: 0; z-index: 0; }
-  .reel > *:not(.bgfx) { position: relative; z-index: 1; }
+  .reel:not(.video) > *:not(.bgfx) { position: relative; z-index: 1; }
   .emoji { font-size: 88px; line-height: 1; margin-bottom: 18px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.35));
     animation: bob 3s ease-in-out infinite; }
   @keyframes bob { 50% { transform: translateY(-8px) rotate(-4deg); } }
@@ -127,6 +127,75 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 20; background: #222; color: #fff;
     padding: 10px 16px; border-radius: 999px; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   @media (prefers-reduced-motion: reduce) { .vis-loading, .side button.attn { animation: none; } }
+  /* ---------- video reels (storyboard) ---------- */
+  .reel.video { padding: 0; background: #0b1020; }
+  .reel.video > .stage { position: absolute; inset: 0; overflow: hidden; z-index: 0;
+    background: radial-gradient(120% 70% at 50% 25%, #1f2a44 0%, #0b1020 70%); }
+  .reel.video > .stage::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(0,0,0,.35) 0%, transparent 18%, transparent 62%, rgba(0,0,0,.75) 100%); }
+  .scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 96px 26px 190px; opacity: 0; transition: opacity .55s ease; text-align: center; color: #fff; }
+  .scene.on { opacity: 1; }
+  .sc-image .frame { width: 100%; height: 100%; max-height: 58vh; overflow: hidden; border-radius: 20px; position: relative;
+    box-shadow: 0 20px 60px rgba(0,0,0,.55); background: #111827; }
+  .sc-image .frame.doc { background: #fff; padding: 10px; }
+  .sc-image img { width: 100%; height: 100%; object-fit: cover; display: block; transform-origin: var(--o, 50% 50%); }
+  .sc-image .frame.doc img { object-fit: contain; }
+  .scene.on .kb { animation: kb 10s ease-out forwards; }
+  @keyframes kb { from { transform: scale(1.02); } to { transform: scale(1.32); } }
+  .ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(100deg, rgba(255,255,255,.05) 30%, rgba(255,255,255,.14) 50%, rgba(255,255,255,.05) 70%);
+    background-size: 300% 100%; animation: shimmer 1.6s linear infinite; }
+  .ph span { font-size: 96px; animation: bob 3s ease-in-out infinite; }
+  .sc-stat .vs { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: center; }
+  .statcol { max-width: 200px; }
+  .num { font: 800 78px/1 system-ui, sans-serif; letter-spacing: -2px;
+    background: linear-gradient(90deg, #a5f3fc, #c4b5fd); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lbl { margin-top: 10px; font-size: 18px; color: #cbd5e1; font-weight: 600; }
+  .vsarrow { font-size: 40px; color: #fcd34d; }
+  .verified { margin-top: 22px; font-size: 12px; color: #86efac; letter-spacing: .5px; }
+  .scene.on .pop { animation: pop .7s cubic-bezier(.2,1.5,.4,1) both; }
+  @keyframes pop { from { transform: scale(.5); opacity: 0; } }
+  .steps { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .step { border: 2px solid #7dd3fc; color: #e0f2fe; background: rgba(14,165,233,.14); border-radius: 14px;
+    padding: 10px 22px; font-weight: 700; font-size: 21px; box-shadow: 0 0 24px rgba(125,211,252,.18); }
+  .steps .arrow { color: #7dd3fc; font-size: 22px; line-height: 1; }
+  .scene.on .seq { animation: rise .5s ease both; animation-delay: calc(var(--i) * .32s); }
+  @keyframes rise { from { opacity: 0; transform: translateY(16px); } }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; }
+  .col { border-radius: 18px; padding: 18px 14px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.16); text-align: left; }
+  .col h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; color: #fcd34d; }
+  .col p { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.3; }
+  .scene.on .from-left { animation: fl .6s ease both; }
+  .scene.on .from-right { animation: fr .6s ease .25s both; }
+  @keyframes fl { from { opacity: 0; transform: translateX(-40px); } }
+  @keyframes fr { from { opacity: 0; transform: translateX(40px); } }
+  .sc-quote blockquote { font: 600 29px/1.35 Georgia, "Times New Roman", serif; margin: 0; }
+  .sc-quote mark { color: inherit; background: linear-gradient(transparent 58%, rgba(250,204,21,.6) 58%) no-repeat; background-size: 0% 100%; }
+  .sc-quote.on mark { animation: hl 2.2s ease .3s forwards; }
+  @keyframes hl { to { background-size: 100% 100%; } }
+  .sc-quote .pg { margin-top: 16px; font-size: 13px; color: #cbd5e1; }
+  .sc-term .t { font: 800 46px/1.05 system-ui, sans-serif; letter-spacing: -1px; }
+  .sc-term .t span { display: inline-block; }
+  .sc-term .d { margin-top: 16px; font-size: 20px; color: #cbd5e1; max-width: 360px; }
+  .segs { position: absolute; top: 54px; left: 14px; right: 14px; display: flex; gap: 4px; z-index: 3; }
+  .seg { flex: 1; height: 3px; border-radius: 3px; background: rgba(255,255,255,.25); overflow: hidden; }
+  .seg b { display: block; height: 100%; width: 0; background: #fff; }
+  .seg.done b { width: 100% !important; }
+  .reel.video .hud { position: absolute; top: 66px; left: 14px; right: 14px; z-index: 3; display: flex; }
+  .chip { background: rgba(0,0,0,.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 6px 12px; font-size: 14px; font-weight: 700; }
+  .subtitle { position: absolute; left: 18px; right: 74px; bottom: 92px; z-index: 3; text-align: center;
+    font: 750 25px/1.3 system-ui, sans-serif; text-shadow: 0 2px 14px rgba(0,0,0,.9); min-height: 2.6em; display: flex;
+    align-items: flex-end; justify-content: center; flex-wrap: wrap; gap: 0 .28em; }
+  .subtitle .w { opacity: .45; transition: opacity .15s; }
+  .subtitle .w.on { opacity: 1; }
+  .credit { position: absolute; left: 14px; right: 74px; bottom: 56px; z-index: 3; font-size: 11px; color: #cbd5e1; text-align: center; line-height: 1.35; }
+  .credit a { color: #e2e8f0; }
+  .reel.video > .side { bottom: 150px; }
+  .transcript { position: absolute; left: 10px; right: 10px; bottom: 10px; max-height: 70%; overflow: auto; z-index: 5;
+    background: rgba(15,15,22,.96); border: 1px solid var(--line); border-radius: 18px; padding: 16px; font-size: 15px; }
+  .transcript h3 { margin: 0 0 8px; }
+  @media (prefers-reduced-motion: reduce) { .scene.on .kb, .scene.on .seq, .scene.on .pop, .ph, .ph span { animation: none; } }
 </style>
 </head>
 <body>
@@ -244,8 +313,8 @@ $("#backBtn").onclick = backHome;
 $("#muteBtn").onclick = () => {
   muted = !muted; $("#muteBtn").textContent = muted ? "🔇 Muted" : "🔊 Sound on";
   $("#muteBtn").setAttribute("aria-pressed", muted);
-  if (muted) { stopAudio(); feed.querySelectorAll(".caption").forEach(c => c.classList.add("static")); }
-  else if (current?.dataset.reel !== undefined) playReel(current, +current.dataset.reel, true);
+  if (current?.dataset.reel !== undefined && !current.classList.contains("intro")) playReel(current, +current.dataset.reel, !muted);
+  else if (muted) stopAudio();
 };
 function backHome() {
   stopAudio(); finished = true;
@@ -374,36 +443,110 @@ function updateProgress() {
   $("#progress").style.width = `${(100 * (idx + 1)) / cards.length}%`;
 }
 
-/* ---------------- reel cards + visuals ---------------- */
-function reelCard(i) {
-  const c = deck.concepts[i], [a, b] = GRADIENTS[(i + 1) % GRADIENTS.length];
-  const el = document.createElement("section");
-  el.className = "card reel"; el.dataset.reel = i;
-  const words = c.script.split(/\s+/).map((w, k) => `<span class="w" data-k="${k}">${esc(w)}</span>`).join(" ");
+/* ---------------- reel = animated storyboard (scenes synced to narration) ---------------- */
+const FOCUS = { center: "50% 50%", top: "50% 18%", bottom: "50% 82%", left: "18% 50%", right: "82% 50%" };
+function beatsOf(c) { return c.beats?.length ? c.beats : [{ say: c.script, scene: "image", focus: "center", at: 0 }]; }
+function frameInner(c) {
   const v = c.figure || c.visual;
-  el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
-    <h2>${esc(c.emoji)} ${esc(c.title)}</h2>
-    <div class="vis">${v ? visHtml(v) : `<div class="vis-loading"><span>${esc(c.emoji)}</span><small>Finding a real image…</small></div>`}</div>
-    <div class="caption${muted ? " static" : ""}">${words}</div>
-    <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
-    <div class="ai-note">Script &amp; voice are AI-generated from your reading · <span class="vstate">🎧 voice: waiting</span></div>
-    <div class="side">
-      <button type="button" class="replay" aria-label="Play narration">▶</button>
-      <button type="button" class="save" aria-label="Save to review queue">🔖</button>
-    </div>`;
-  $(".replay", el).onclick = () => playReel(el, i, true);
-  $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
-  return el;
+  if (!v) return `<div class="ph"><span>${esc(c.emoji)}</span></div>`;
+  return `<img class="kb" src="${v.kind === "wikimedia" ? esc(v.src) : v.src}" alt="${esc(v.caption || v.title || c.title)}" referrerpolicy="no-referrer">`;
 }
-function visHtml(v) {
-  if (v.kind === "source") return `<figure class="fig"><img src="${v.src}" alt="${esc(v.caption)}">
-      <figcaption><span class="src">FROM YOUR READING · p.${esc(v.page)}</span>original figure, unedited</figcaption></figure>`;
-  if (v.kind === "wikimedia") return `<figure class="fig photo"><img src="${esc(v.src)}" alt="${esc(v.title)}" referrerpolicy="no-referrer">
-      <figcaption><span class="src wiki">📷 WIKIMEDIA COMMONS</span><a href="${esc(v.page_url)}" target="_blank" rel="noopener">${esc(v.title)}</a> · ${esc(v.author)} · ${esc(v.license)}</figcaption></figure>`;
-  if (v.kind === "ai") return `<figure class="fig photo"><img src="${v.src}" alt="AI-generated illustration">
-      <figcaption><span class="src ai">✨ AI-GENERATED ILLUSTRATION</span>by Gemini · not from your reading</figcaption></figure>`;
+function sceneHtml(c, b, k) {
+  const head = `<div class="scene sc-${b.scene}" data-k="${k}"`;
+  if (b.scene === "stat") {
+    const one = (v, l) => `<div class="statcol"><div class="num pop" data-v="${esc(v)}">${esc(v)}</div><div class="lbl">${esc(l)}</div></div>`;
+    return `${head}><div class="vs">${one(b.value, b.label)}${b.value2 ? `<div class="vsarrow pop" style="animation-delay:.5s">→</div>${one(b.value2, b.label2)}` : ""}</div>
+      <div class="verified">✓ number from your reading</div></div>`;
+  }
+  if (b.scene === "diagram") return `${head}><div class="steps">${b.steps.map((s, j) =>
+      `${j ? `<div class="arrow seq" style="--i:${j * 2 - 1}">↓</div>` : ""}<div class="step seq" style="--i:${j * 2}">${esc(s)}</div>`).join("")}</div></div>`;
+  if (b.scene === "compare") return `${head}><div class="cols">
+      <div class="col from-left"><h4>${esc(b.left_title)}</h4><p>${esc(b.left)}</p></div>
+      <div class="col from-right"><h4>${esc(b.right_title)}</h4><p>${esc(b.right)}</p></div></div></div>`;
+  if (b.scene === "quote") return `${head}><blockquote>“<mark>${esc(b.text)}</mark>”</blockquote><div class="pg">— your reading, p.${esc(c.page)} · verbatim</div></div>`;
+  if (b.scene === "term") return `${head}><div class="t">${esc(b.term).split(" ").map((w, j) => `<span class="seq" style="--i:${j}">${w}</span>`).join(" ")}</div>
+      <div class="d seq" style="--i:${b.term.split(" ").length + 1}">${esc(b.definition)}</div></div>`;
+  const v = c.figure || c.visual;
+  return `${head} style="--o:${FOCUS[b.focus] || FOCUS.center}"><div class="frame${v?.kind === "source" ? " doc" : ""}">${frameInner(c)}</div></div>`;
+}
+function chunksOf(script) {  // subtitle lines of ~7 words, breaking after punctuation when possible
+  const words = [], re = /\S+/g; let m;
+  while ((m = re.exec(script))) words.push({ w: m[0], at: m.index });
+  const out = []; let cur = [];
+  words.forEach((w, j) => {
+    cur.push(w);
+    if (cur.length >= 9 || (cur.length >= 4 && /[.,;:!?]$/.test(w.w)) || j === words.length - 1) { out.push(cur); cur = []; }
+  });
+  return out;
+}
+function creditHtml(c) {
+  const v = c.figure || c.visual;
+  if (!v) return "";
+  if (v.kind === "source") return `🖼️ Figure from your reading, p.${esc(v.page)} (unedited)`;
+  if (v.kind === "wikimedia") return `📷 <a href="${esc(v.page_url)}" target="_blank" rel="noopener">${esc(v.title)}</a> · ${esc(v.author)} · ${esc(v.license)} · Wikimedia Commons`;
+  if (v.kind === "ai") return `✨ AI-generated illustration (Gemini) · not from your reading`;
   return "";
 }
+function reelCard(i) {
+  const c = deck.concepts[i], beats = beatsOf(c);
+  const el = document.createElement("section");
+  el.className = "card reel video"; el.dataset.reel = i;
+  el.innerHTML = `<div class="stage">${beats.map((b, k) => sceneHtml(c, b, k)).join("")}</div>
+    <div class="segs">${beats.map(() => `<i class="seg"><b></b></i>`).join("")}</div>
+    <div class="hud"><span class="chip">${esc(c.emoji)} ${esc(c.title)}</span></div>
+    <div class="subtitle" aria-live="off"></div>
+    <div class="credit"><span class="vcredit">${creditHtml(c)}</span> <span class="vstate">🎙️ AI voice</span></div>
+    <div class="side">
+      <button type="button" class="replay" aria-label="Play narration">▶</button>
+      <button type="button" class="tx" aria-label="Show transcript">📝</button>
+      <button type="button" class="save" aria-label="Save to review queue">🔖</button>
+    </div>
+    <div class="transcript hidden">
+      <h3>${esc(c.emoji)} ${esc(c.title)}</h3><p>${esc(c.script)}</p>
+      <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
+      <div class="ai-note">Script &amp; voice are AI-generated from your reading. On-screen numbers, quotes, and labels are checked against the source text; anything unverifiable is replaced with a picture.</div>
+    </div>`;
+  el._beats = beats; el._chunks = chunksOf(c.script); el._beat = -1; el._chunk = -1;
+  $(".replay", el).onclick = () => playReel(el, i, true);
+  $(".tx", el).onclick = () => $(".transcript", el).classList.toggle("hidden");
+  $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
+  showAt(el, 0);
+  return el;
+}
+function showAt(el, ch) {
+  const beats = el._beats;
+  let k = 0; beats.forEach((b, j) => { if (b.at <= ch) k = j; });
+  if (k !== el._beat) {
+    el._beat = k;
+    el.querySelectorAll(".scene").forEach(s => s.classList.remove("on"));
+    const sc = el.querySelector(`.scene[data-k="${k}"]`);
+    void sc.offsetWidth;  // restart CSS animations
+    sc.classList.add("on");
+    sc.querySelectorAll(".num").forEach(countUp);
+    el.querySelectorAll(".seg").forEach((s, j) => { s.classList.toggle("done", j < k); s.classList.toggle("now", j === k); });
+  }
+  // beat progress inside the current segment
+  const next = beats[k + 1]?.at ?? deck.concepts[+el.dataset.reel].script.length;
+  const seg = el.querySelectorAll(".seg b")[k];
+  if (seg) seg.style.width = `${Math.max(0, Math.min(100, 100 * (ch - beats[k].at) / Math.max(1, next - beats[k].at)))}%`;
+  const chunks = el._chunks;
+  let ci = 0; chunks.forEach((cw, j) => { if (cw[0].at <= ch) ci = j; });
+  const sub = $(".subtitle", el);
+  if (ci !== el._chunk) { el._chunk = ci; sub.innerHTML = chunks[ci].map(w => `<span class="w" data-at="${w.at}">${esc(w.w)}</span>`).join(" "); }
+  sub.querySelectorAll(".w").forEach(w => w.classList.toggle("on", +w.dataset.at <= ch));
+}
+function countUp(n) {
+  const m = /^(\D*)([\d][\d,]*\.?\d*)(.*)$/.exec(n.dataset.v || "");
+  if (!m) return;
+  const target = parseFloat(m[2].replace(/,/g, "")), dec = (m[2].split(".")[1] || "").length, t0 = performance.now();
+  const step = () => {
+    const p = Math.min(1, (performance.now() - t0) / 1100), e = 1 - Math.pow(1 - p, 3);
+    n.textContent = m[1] + (target * e).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec }) + m[3];
+    if (p < 1) requestAnimationFrame(step);
+  };
+  step();
+}
+function visHtml(v) { return ""; }  // legacy hook (visuals now live inside image scenes)
 const visQ = []; let visActive = 0;
 function queueVisual(i) { visQ.push([deck, i]); pumpVis(); }
 function pumpVis() {
@@ -423,10 +566,11 @@ function pumpVis() {
   }
 }
 function renderVis(i) {
-  const box = feed.querySelector(`.reel[data-reel="${i}"] .vis`); if (!box) return;
+  const el = feed.querySelector(`.reel[data-reel="${i}"]`); if (!el) return;
   const c = deck.concepts[i];
-  if (!c.visual && c._visRetry === 1 && !c._visShown) { c._visShown = 1; return; }  // keep shimmer while we retry
-  box.innerHTML = c.visual ? visHtml(c.visual) : `<div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>`;
+  if (!c.visual) return;
+  el.querySelectorAll(".sc-image .frame").forEach(f => { f.classList.toggle("doc", c.visual.kind === "source"); f.innerHTML = frameInner(c); });
+  $(".vcredit", el).innerHTML = creditHtml(c);
 }
 
 /* ---------------- quiz + teach-back (Gemma 4) ---------------- */
@@ -591,21 +735,34 @@ function stopAudio() {
   try { speechSynthesis.cancel(); } catch {}
 }
 function setVState(el, s) { const v = $(".vstate", el); if (v) v.textContent = s; }
-
+// Drive the storyboard from a "character position in the script" clock (audio, device voice, or silent).
+function clock(el, tok, getCh, len) {
+  cancelAnimationFrame(raf);
+  const loop = () => {
+    if (tok !== playToken) return;
+    const ch = getCh();
+    if (ch != null) showAt(el, ch);
+    if (ch == null || ch <= len) raf = requestAnimationFrame(loop);
+  };
+  raf = requestAnimationFrame(loop);
+}
+const CPS = 14.5;  // typical narration speed, chars/second
+function silentClock(el, tok, c, msg) {
+  setVState(el, msg);
+  const t0 = performance.now();
+  clock(el, tok, () => (performance.now() - t0) / 1000 * CPS, c.script.length + 1);
+}
 function playReel(el, i, force) {
   stopAudio();
-  const c = deck.concepts[i];
+  const c = deck.concepts[i], tok = playToken;
   $(".replay", el).classList.remove("attn");
-  if (muted && !force) return;
-  const ctx = ensureCtx(), tok = playToken, e = getTTS(c);
-  const nx = deck.concepts[i + 1];
-  const words = el.querySelectorAll(".caption .w"), cap = $(".caption", el);
-  cap.classList.remove("static"); words.forEach(w => w.classList.remove("on"));
-  setVState(el, "🎧 voice: Gemini TTS starting…");
-  if (ctx && ctx.state !== "running") { setVState(el, "▶ tap play to listen"); $(".replay", el).classList.add("attn"); cap.classList.add("static"); return; }
-
-  const text = narration(c), titleLen = c.title.length + 2, starts = []; let pos = 0;
-  c.script.split(/\s+/).forEach(w => { const at = c.script.indexOf(w, pos); starts.push(at); pos = at + w.length; });
+  el._beat = -1; el._chunk = -1; showAt(el, 0);
+  if (muted && !force) return silentClock(el, tok, c, "🔇 muted · captions only");
+  const ctx = ensureCtx();
+  if (!ctx || ctx.state !== "running") { $(".replay", el).classList.add("attn"); return silentClock(el, tok, c, "▶ tap play for sound"); }
+  const e = getTTS(c), nx = deck.concepts[i + 1];
+  const text = narration(c), titleLen = c.title.length + 2;
+  setVState(el, "🎙️ AI voice loading…");
   let t0 = null, next = 0, scheduled = 0, started = false;
   const pump = () => {
     if (tok !== playToken) return;
@@ -616,46 +773,40 @@ function playReel(el, i, force) {
       if (t0 === null) { t0 = ctx.currentTime + 0.05; next = t0; }
       if (next < ctx.currentTime) next = ctx.currentTime + 0.02;  // network underrun: resume cleanly
       s.start(next); next += buf.duration; sources.push(s);
-      if (!started) { started = true; setVState(el, "🔊 voice: Gemini TTS"); raf = requestAnimationFrame(tick); }
+      if (!started) {
+        started = true; setVState(el, "🎙️ AI voice (Gemini TTS)");
+        clock(el, tok, () => {
+          if (e.done && ctx.currentTime >= next) return 1e9;
+          const total = e.done ? next - t0 : Math.max(next - t0, text.length / CPS);
+          return ((ctx.currentTime - t0) / total) * text.length - titleLen;
+        }, c.script.length + 1);
+      }
     }
     if (e.done) {
       e.listeners.delete(pump);
-      if (e.failed && !started) { setVState(el, "🗣️ voice: device (Gemini TTS busy)"); speakBrowser(el, c); }
+      if (e.failed && !started) speakBrowser(el, c, tok);
       if (nx) getTTS(nx);  // this clip is fully generated: start the next reel's voice in the background
     }
   };
-  const tick = () => {
-    if (tok !== playToken || t0 === null) return;
-    // Until the stream finishes, estimate total length from speaking rate (~14.5 chars/s).
-    const total = e.done ? next - t0 : Math.max(next - t0, text.length / 14.5);
-    const ch = ((ctx.currentTime - t0) / total) * text.length - titleLen;
-    starts.forEach((s, k) => { if (s <= ch) words[k]?.classList.add("on"); });
-    if (e.done && ctx.currentTime >= next) { words.forEach(w => w.classList.add("on")); return; }
-    raf = requestAnimationFrame(tick);
-  };
   e.listeners.add(pump); pump();
-  // If the voice hasn't started in 8 s, use the device voice so the reel is never silent.
-  setTimeout(() => { if (tok === playToken && !started) { e.listeners.delete(pump); setVState(el, "🗣️ voice: device (Gemini TTS slow)"); speakBrowser(el, c); } }, 8000);
+  setTimeout(() => { if (tok === playToken && !started) { e.listeners.delete(pump); speakBrowser(el, c, tok); } }, 8000);
 }
 function pickVoice() {
   const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
   return vs.find(v => /Samantha|Google US English|Aria|Jenny/i.test(v.name)) || vs[0];
 }
-function speakBrowser(el, c) {
-  const words = el.querySelectorAll(".caption .w");
-  words.forEach(w => w.classList.remove("on"));
+function speakBrowser(el, c, tok) {
+  setVState(el, "🗣️ device voice (Gemini TTS busy)");
   const u = new SpeechSynthesisUtterance(narration(c));
   const v = pickVoice(); if (v) u.voice = v;
   u.rate = 1.05;
-  const offset = c.title.length + 2, starts = []; let pos = 0;
-  c.script.split(/\s+/).forEach(w => { const at = c.script.indexOf(w, pos); starts.push(at); pos = at + w.length; });
-  u.onboundary = e => {
-    const ci = e.charIndex - offset; if (ci < 0) return;
-    starts.forEach((s, k) => { if (s <= ci) words[k]?.classList.add("on"); });
-  };
-  u.onend = () => words.forEach(w => w.classList.add("on"));
+  const titleLen = c.title.length + 2, t0 = performance.now();
+  let last = null, done = false;
+  u.onboundary = e => { last = e.charIndex - titleLen; };
+  u.onend = () => { done = true; };
   speechSynthesis.speak(u);
-  setTimeout(() => { if (!el.querySelector(".w.on")) $(".caption", el).classList.add("static"); }, 2500);
+  // Use real word boundaries when the browser reports them, otherwise estimate from time.
+  clock(el, tok, () => done ? 1e9 : (last ?? ((performance.now() - t0) / 1000 * CPS - titleLen)), c.script.length + 1);
 }
 
 /* ---------------- scroll tracking ---------------- */

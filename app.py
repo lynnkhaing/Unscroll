@@ -117,7 +117,7 @@ OUTPUT FORMAT: JSON Lines. One compact JSON object per line, nothing else (no ma
 no blank lines). Write the lines in this order:
 1) {{"type":"deck","deck_title":str,"subject":str}}  (a catchy title for the whole reading + the academic subject)
 2) then {n} lines, one per concept, each:
-{{"type":"concept","title":str,"emoji":str,"script":str,"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str}}
+{{"type":"concept","title":str,"emoji":str,"script":str,"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str,"beats":[beat]}}
 
 Field rules:
 - title: 2-6 words. emoji: one emoji that fits.
@@ -135,6 +135,23 @@ Field rules:
   concept is abstract and no literal real-world image exists (then we illustrate it instead).
 - image_prompt: one sentence describing a vivid, accurate, engaging illustration of the concept
   (a concrete scene or metaphor; no words, letters, or numbers in the image).
+
+- beats: a storyboard of 3-5 animated scenes that play while the script is narrated, like a
+  short explainer video. Each beat: {{"say": the exact consecutive words of the script spoken
+  during this scene (beats in order, together covering the whole script), "scene": one of the
+  scene types below, plus that scene's fields}}. Make it feel like a motion-graphics explainer:
+  use AT MOST 2 "image" beats per reel, and AT LEAST one "diagram", "compare", "quote", or "stat"
+  beat. Start with "image" or "term".
+  Example beat: {{"say":"Alone, 85% helped; with four others, only 31% did.","scene":"stat","value":"85%","label":"helped when alone","value2":"31%","label2":"with four others"}}
+  ("scene" is always a plain string; the scene's fields sit next to it.)
+  Scene types (ALL text and numbers must come from the source; never invent facts):
+  * "image": {{"focus": "center"|"top"|"bottom"|"left"|"right"}}  slow zoom on the reel's picture
+  * "stat": {{"value": str, "label": str, "value2": str, "label2": str}}  a number from the source
+    (e.g. "85%"), optional second number to contrast ("" if none). Only if the source has numbers.
+  * "diagram": {{"steps": [str]}}  2-5 short labels (1-3 words) of a process/sequence/cause chain
+  * "compare": {{"left_title": str, "left": str, "right_title": str, "right": str}}  two short sides
+  * "quote": {{"text": str}}  a verbatim excerpt (under 20 words) copied exactly from the source
+  * "term": {{"term": str, "definition": str}}  a key term and a definition under 12 words
 
 FIGURES (cropped from the source document):
 {figures}
@@ -232,16 +249,17 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
 
     fig_list = "\n".join(f"- {f['id']} (p.{f['page']}): {f['caption']}" for f in figures) or "(none)"
     parts.append(DIGEST_PROMPT.format(n=n, figures=fig_list))
-    return StreamingResponse(stream_digest(parts, figures, n), media_type="application/x-ndjson")
+    source = next((p for p in parts if isinstance(p, str)), "")
+    return StreamingResponse(stream_digest(parts, figures, n, source), media_type="application/x-ndjson")
 
 
-async def stream_digest(parts: list, figures: list[dict], n: int):
+async def stream_digest(parts: list, figures: list[dict], n: int, source: str = ""):
     """NDJSON stream: deck line, then each concept as soon as Gemini finishes writing it.
     Pings every few seconds keep slow connections (and Safari) from timing out."""
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     put = lambda item: loop.call_soon_threadsafe(queue.put_nowait, item)
-    threading.Thread(target=_digest_worker, args=(parts, figures, n, put), daemon=True).start()
+    threading.Thread(target=_digest_worker, args=(parts, figures, n, put, source), daemon=True).start()
     while True:
         try:
             item = await asyncio.wait_for(queue.get(), timeout=4)
@@ -253,7 +271,8 @@ async def stream_digest(parts: list, figures: list[dict], n: int):
         yield json.dumps(item) + "\n"
 
 
-def _digest_worker(parts, figures, n, put):
+def _digest_worker(parts, figures, n, put, source=""):
+    src_norm = _norm(source)
     by_id = {f["id"]: f for f in figures}
     used: set[str] = set()
     sent = 0
@@ -277,7 +296,7 @@ def _digest_worker(parts, figures, n, put):
                                      "subject": item.get("subject", ""), "model": model,
                                      "figures_found": len(figures)})
                         elif item.get("type") == "concept" and sent < n:
-                            c = _clean_concept(item, by_id, used)
+                            c = _clean_concept(item, by_id, used, src_norm)
                             if c:
                                 if sent == 0 and not deck_sent:
                                     put({"type": "deck", "deck_title": "Your reading", "subject": "",
@@ -287,7 +306,7 @@ def _digest_worker(parts, figures, n, put):
                                 sent += 1
                 tail = _parse_line(buf)
                 if tail and tail.get("type") == "concept" and sent < n:
-                    c = _clean_concept(tail, by_id, used)
+                    c = _clean_concept(tail, by_id, used, src_norm)
                     if c:
                         put({"type": "concept", "index": sent, "concept": c})
                         sent += 1
@@ -321,7 +340,93 @@ def _parse_line(line: str):
         return None
 
 
-def _clean_concept(item: dict, by_id: dict, used: set) -> dict | None:
+# ---------- Storyboard fact checks: every on-screen word/number must be traceable to the source ----------
+
+SCENES = {"image", "stat", "diagram", "compare", "quote", "term"}
+STOP = set("the a an and or of to in on for with by from is are was were be as at that this it its into "
+           "than then more less most their they them we you your our not no".split())
+
+
+def _norm(t: str) -> str:
+    t = (t or "").lower().replace("\u2019", "'").replace("-\n", "")
+    t = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", t)  # keep decimal points, drop sentence periods
+    t = re.sub(r"[^a-z0-9%.' ]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _numbers_ok(texts: list[str], src: str) -> bool:
+    for t in texts:
+        for num in re.findall(r"\d[\d,.]*%?", t or ""):
+            core = num.rstrip(".,").replace(",", "")
+            if core and core not in src.replace(",", ""):
+                return False
+    return True
+
+
+def _words_ok(texts: list[str], src: str, need: float = 0.6) -> bool:
+    words = [w for t in texts for w in _norm(t).split() if len(w) > 3 and w not in STOP]
+    if not words:
+        return True
+    hits = sum(1 for w in words if w in src or w[:5] in src)  # stem match: "helped" ~ "help"
+    return hits / len(words) >= need
+
+
+def _check_beat(b: dict, src: str) -> dict:
+    sc = b.get("scene")
+    if isinstance(sc, dict):  # model sometimes nests: {"scene": {"stat": {...}}} or {"scene": {"type": "stat", ...}}
+        key = next((k for k in sc if k in SCENES), None)
+        if key and isinstance(sc[key], dict):
+            b = {**b, **sc[key], "scene": key}
+        else:
+            b = {**b, **sc, "scene": sc.get("type") or sc.get("scene")}
+    scene = b.get("scene") if isinstance(b.get("scene"), str) and b.get("scene") in SCENES else "image"
+    out = {"say": str(b.get("say") or ""), "scene": scene}
+    if scene == "image":
+        out["focus"] = b.get("focus") if b.get("focus") in ("center", "top", "bottom", "left", "right") else "center"
+        return out
+    fields = {
+        "stat": ["value", "label", "value2", "label2"], "diagram": ["steps"],
+        "compare": ["left_title", "left", "right_title", "right"], "quote": ["text"], "term": ["term", "definition"],
+    }[scene]
+    for f in fields:
+        v = b.get(f)
+        if f == "steps":
+            out[f] = [str(x)[:40] for x in v][:5] if isinstance(v, list) else []
+        else:
+            out[f] = str(v or "")[:160]
+    texts = out["steps"] if scene == "diagram" else [out[f] for f in fields]
+    ok = bool(src)  # without source text we can't verify, so only image scenes survive
+    if ok and scene == "stat":
+        ok = bool(re.search(r"\d", out["value"])) and _numbers_ok(texts, src) and _words_ok([out["label"], out["label2"]], src, .34)
+    elif ok and scene == "quote":
+        q = _norm(out["text"])
+        ok = len(q) > 12 and q in src
+    elif ok and scene == "diagram":
+        ok = 2 <= len(out["steps"]) <= 5 and _numbers_ok(texts, src) and _words_ok(texts, src)
+    elif ok:
+        ok = all(texts[:1]) and _numbers_ok(texts, src) and _words_ok(texts, src, .5)
+    return out if ok else {"say": out["say"], "scene": "image", "focus": "center", "dropped": scene}
+
+
+def _storyboard(item: dict, script: str, src: str) -> list[dict]:
+    raw = item.get("beats") if isinstance(item.get("beats"), list) else []
+    beats = [_check_beat(b, src) for b in raw[:6] if isinstance(b, dict)]
+    if not beats:
+        beats = [{"say": script, "scene": "image", "focus": "center"}]
+    # Timing: each beat starts where its words begin in the script (fallback: evenly spaced).
+    low, pos = script.lower(), 0
+    for k, b in enumerate(beats):
+        say = b["say"].strip().lower()[:40]
+        at = low.find(say, pos) if say else -1
+        b["at"] = at if at >= 0 else round(len(script) * k / len(beats))
+        pos = max(pos, b["at"])
+    beats[0]["at"] = 0
+    for k in range(1, len(beats)):
+        beats[k]["at"] = max(beats[k]["at"], beats[k - 1]["at"] + 1)
+    return beats
+
+
+def _clean_concept(item: dict, by_id: dict, used: set, src: str = "") -> dict | None:
     try:
         c = Concept.model_validate({
             **item,
@@ -334,6 +439,11 @@ def _clean_concept(item: dict, by_id: dict, used: set) -> dict | None:
         return None
     c["image_query"] = str(item.get("image_query") or "")[:80]
     c["image_prompt"] = str(item.get("image_prompt") or c["title"])[:400]
+    try:
+        c["beats"] = _storyboard(item, c["script"], src)
+    except Exception as e:  # a malformed storyboard must never cost us the reel
+        print("storyboard error", e)
+        c["beats"] = [{"say": c["script"], "scene": "image", "focus": "center", "at": 0}]
     f = by_id.get(str(item.get("figure_id") or "").strip())
     if f and f["id"] not in used:
         used.add(f["id"])
