@@ -218,6 +218,14 @@
   .nudge { background: #1d1830; border: 1px solid #3a2f63; border-radius: 12px; padding: 10px 12px; margin: 8px 0; }
   .prev { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
   #srsChart svg { width: 100%; height: auto; display: block; }
+  .how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 16px; }
+  .how div { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+  .how b { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 12px; }
+  .how span { font-weight: 700; font-size: 14px; }
+  .how small { color: var(--muted); font-size: 12px; }
+  .sec { font-size: 18px; margin: 0 0 2px; }
+  .secd { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  @media (max-width: 420px) { .how { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -227,7 +235,15 @@
   <h1 class="brand">🌀 <span>Unscroll</span></h1>
   <p class="tag">Your assigned reading, as a feed you can actually finish and remember.</p>
 
+  <div class="how">
+    <div><b>1</b><span>📄 Add a reading</span><small>PDF, link, or text</small></div>
+    <div><b>2</b><span>🎬 Watch short reels</span><small>narrated, with real figures</small></div>
+    <div><b>3</b><span>🧠 Prove you got it</span><small>quick quizzes + explain it back</small></div>
+  </div>
+
   <section class="panel">
+    <h2 class="sec">Start here: add your reading</h2>
+    <p class="secd">Pick <b>one</b>: upload a file, paste a link, or paste text. Then press <b>Unscroll it</b>.</p>
     <div id="drop" class="drop">
       <div style="font-size:34px">📄</div>
       <strong>Drop a PDF reading here</strong><br>
@@ -243,21 +259,23 @@
     <div class="or">— or paste text —</div>
     <textarea id="text" placeholder="Paste an article, chapter, or lecture notes…"></textarea>
     <div class="row" style="margin-top:12px; justify-content:space-between">
-      <button class="btn ghost" id="sampleBtn" type="button">Use sample reading</button>
+      <button class="btn ghost" id="sampleBtn" type="button" title="Fills in a short psychology reading so you can try it">Try a sample reading</button>
       <button class="btn" id="goBtn" type="button">Unscroll it →</button>
     </div>
     <div id="status" class="hidden" style="margin-top:14px"></div>
   </section>
 
   <section class="panel" id="learnPanel">
-    <strong>📚 Your learning</strong>
+    <h2 class="sec">📚 Your learning</h2>
+    <p class="secd">Your progress across every reading: how well you remember each topic, your scores, the explanations you wrote, and what to study next.</p>
     <div id="learnBody" class="small" style="margin-top:6px"></div>
   </section>
 
   <section class="panel" id="reviewPanel">
     <div class="row" style="justify-content:space-between; margin-bottom:6px">
-      <strong>🔁 Review queue</strong>
-      <button class="btn ghost hidden" id="reviewBtn" type="button" style="padding:6px 14px">Review now</button>
+      <div><h2 class="sec" style="margin:0">🔁 Review queue</h2>
+      <p class="secd" style="margin:2px 0 0">Ideas you missed or saved. They come back on a schedule so they stick.</p></div>
+      <button class="btn ghost hidden" id="reviewBtn" type="button" style="padding:6px 14px">▶ Review now</button>
     </div>
     <div id="reviewList" class="small">Nothing to review yet. Concepts you miss will come back here.</div>
   </section>
