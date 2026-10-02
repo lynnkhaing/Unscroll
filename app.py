@@ -674,8 +674,9 @@ class TTSReq(BaseModel):
 
 _tts_cache = LRU(200)  # text hash -> full PCM, so replays and prefetched reels are instant
 TTS_RATE = 24000
-TTS_STYLE = ("Read this like an upbeat, warm science-podcast host talking to a college student on their "
-             "commute: energetic hook, clear pacing, natural emphasis.\n\n")
+# Only the narration itself is sent: style instructions in the prompt sometimes get read aloud.
+# The upbeat delivery comes from the voice choice (TTS_VOICE) instead.
+TTS_STYLE = ""
 
 
 @app.post("/api/tts")
