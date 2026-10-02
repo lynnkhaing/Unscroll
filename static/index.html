@@ -50,10 +50,10 @@
   /* ---------- Feed ---------- */
   #feed { position: fixed; inset: 0; overflow-y: scroll; scroll-snap-type: y mandatory; background: #000; }
   .card { height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; position: relative;
-    display: flex; flex-direction: column; justify-content: center; padding: 72px 22px 96px;
+    display: flex; flex-direction: column; justify-content: safe center; padding: 60px 22px 72px;
     max-width: 520px; margin: 0 auto; overflow: hidden; }
   .reel { color: white; padding-right: 84px; }
-  .reel .cite { margin-right: -60px; }
+
   .reel .bgfx { position: absolute; inset: 0; z-index: 0; }
   .reel > *:not(.bgfx) { position: relative; z-index: 1; }
   .emoji { font-size: 88px; line-height: 1; margin-bottom: 18px; filter: drop-shadow(0 8px 24px rgba(0,0,0,.35));
@@ -64,8 +64,17 @@
   .caption .w { opacity: .55; transition: opacity .12s; }
   .caption .w.on { opacity: 1; }
   .caption.static .w { opacity: 1; }
+  .fig { background: white; border-radius: 14px; padding: 8px; margin: 0 0 14px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+  .fig img { display: block; width: 100%; max-height: 26vh; object-fit: contain; }
+  .fig figcaption { color: #333; font-size: 11px; line-height: 1.3; margin-top: 6px; }
+  .fig .src { display: inline-block; background: #111; color: #fff; border-radius: 6px; padding: 1px 6px; margin-right: 4px; font-weight: 700; }
+  .reel.has-fig .caption { font-size: 16px; line-height: 1.4; }
+  .reel.has-fig .kicker { display: none; }
+  .reel.has-fig .cite { margin-top: 10px; }
+  .reel.has-fig h2 { font-size: 26px; margin-bottom: 10px; }
+  .ai-note { margin-top: 8px; font-size: 11px; opacity: .75; }
   .cite { margin-top: 18px; font-size: 13px; background: rgba(0,0,0,.28); border-radius: 12px; padding: 8px 12px; }
-  .side { position: absolute; right: 14px; top: 38%; display: flex; flex-direction: column; gap: 14px; z-index: 2; }
+  .reel > .side { position: absolute; right: 12px; bottom: 90px; display: flex; flex-direction: column; gap: 14px; z-index: 2; }
   .side button { width: 52px; height: 52px; border-radius: 50%; border: 0; background: rgba(0,0,0,.35);
     color: white; font-size: 22px; backdrop-filter: blur(6px); }
   .topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; justify-content: space-between;
@@ -129,7 +138,7 @@
     <div id="reviewList" class="small">Nothing to review yet. Concepts you miss will come back here.</div>
   </section>
 
-  <p class="small">Digest: Gemini 2.5 Flash · Tutor: Gemma 4 (open-weight) · Your uploads are processed in memory and not stored.</p>
+  <p class="small">Digest: Gemini Flash · Tutor: Gemma 4 (open-weight) · Your uploads are processed in memory and not stored.</p>
 </main>
 
 <!-- ================= FEED ================= -->
@@ -163,13 +172,15 @@ The effect can be reduced. Singling out one person ("You in the red jacket, call
 
 let deck = null, items = [], quizzes = [], muted = false, stats = { correct: 0, answered: 0, teach: [] };
 
+const lean = ({ figure, ...c }) => c;
+
 /* ---------------- storage (review queue) ---------------- */
 function loadQueue() { try { return JSON.parse(localStorage.getItem("unscroll.review") || "[]"); } catch { return []; } }
 function saveQueue(q) { try { localStorage.setItem("unscroll.review", JSON.stringify(q)); } catch {} }
 function addToReview(concept, reason) {
   const q = loadQueue().filter(x => x.concept.title !== concept.title);
   const due = new Date(); due.setDate(due.getDate() + 1); due.setHours(0,0,0,0);
-  q.push({ concept, reason, deck: deck?.deck_title || "", due: due.toISOString() });
+  q.push({ concept: lean(concept), reason, deck: deck?.deck_title || "", due: due.toISOString() });
   saveQueue(q);
 }
 function removeFromReview(title) { saveQueue(loadQueue().filter(x => x.concept.title !== title)); }
@@ -255,7 +266,7 @@ function startFeed(isReview) {
   $("#feedWrap").classList.remove("hidden");
   renderFeed();
   // Quizzes come from Gemma in the background while the student watches the first reels.
-  api("/api/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concepts: deck.concepts }) })
+  api("/api/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concepts: deck.concepts.map(lean) }) })
     .then(r => { quizzes = r.questions; document.querySelectorAll(".quiz").forEach(fillQuiz); })
     .catch(e => document.querySelectorAll(".quiz .qbody").forEach(el => el.innerHTML = `<p class="err">Couldn't load quiz: ${esc(e.message)}</p>`));
 }
@@ -276,13 +287,19 @@ function renderFeed() {
     } else if (it.type === "reel") {
       const c = deck.concepts[it.i], [a, b] = GRADIENTS[(it.i + 1) % GRADIENTS.length];
       el.classList.add("reel"); el.dataset.reel = it.i;
+      const f = c.figure;
+      if (f) el.classList.add("has-fig");
+      const figHtml = f ? `<figure class="fig"><img src="${f.data_url}" alt="${esc(f.caption)}" loading="lazy">
+          <figcaption><span class="src">FROM YOUR READING · p.${esc(f.page)}</span>original figure, unedited</figcaption></figure>` : "";
       const words = c.script.split(/\s+/).map((w, k) => `<span class="w" data-k="${k}">${esc(w)}</span>`).join(" ");
       el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
         <div class="kicker">${it.i + 1} / ${deck.concepts.length}</div>
-        <div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>
-        <h2>${esc(c.title)}</h2>
+        ${f ? "" : `<div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>`}
+        <h2>${esc(f ? c.emoji + " " + c.title : c.title)}</h2>
+        ${figHtml}
         <div class="caption">${words}</div>
         <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
+        <div class="ai-note">Script &amp; voice are AI-generated from your reading · visuals are only real figures from the source</div>
         <div class="side">
           <button type="button" class="replay" aria-label="Replay narration">↻</button>
           <button type="button" class="save" aria-label="Save to review queue">🔖</button>
@@ -356,7 +373,7 @@ function setupTeach(el, c) {
     out.innerHTML = `<div class="loading" style="margin-top:12px"><div class="spinner"></div><span>Gemma is grading against the source…</span></div>`;
     try {
       const r = await api("/api/teachback", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ concept: c, explanation: ta.value }) });
+        body: JSON.stringify({ concept: lean(c), explanation: ta.value }) });
       const color = r.score >= 80 ? "var(--good)" : r.score >= 50 ? "var(--mid)" : "var(--bad)";
       const li = a => a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
       out.innerHTML = `<div class="result">

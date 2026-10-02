@@ -1,14 +1,16 @@
 """Unscroll: turn assigned readings into a swipeable learn-feed.
 
-Gemini 2.5 Flash digests the reading (multimodal PDF -> concept reels).
+Gemini Flash digests the reading (multimodal PDF -> concept reels).
 Gemma 4 (open-weight, via the Gemini API) is the tutor: quizzes + teach-back grading.
 """
 
+import base64
 import json
 import os
 import re
 from pathlib import Path
 
+import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +18,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-2.5-flash")
+DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-3.8-flash")
 TUTOR_MODEL = os.environ.get("TUTOR_MODEL", "gemma-4-26b-a4b-it")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 SKILL_PATH = Path(__file__).parent / "skills" / "unscroll-tutor" / "SKILL.md"
@@ -45,10 +47,14 @@ class Concept(BaseModel):
     page: int
 
 
+class DeckConcept(Concept):
+    figure_id: str
+
+
 class Deck(BaseModel):
     deck_title: str
     subject: str
-    concepts: list[Concept]
+    concepts: list[DeckConcept]
 
 
 DIGEST_PROMPT = """You are turning an assigned college reading into a short-form learning feed
@@ -65,20 +71,83 @@ For each concept:
 - key_points: 2-4 short factual points from the source a student must remember.
 - source_quote: a short verbatim quote (under 25 words) from the source supporting this concept.
 - page: the page number in the source where it appears (1 if unknown or plain text).
+- figure_id: the id of ONE figure from the FIGURES list below that directly illustrates this
+  concept, or "" if none fits. Never reuse a figure for two concepts. Do not force a match.
 
 deck_title: a catchy title for the whole reading. subject: the academic subject.
+
+FIGURES (cropped from the source document):
+{figures}
 """
+
+
+# ---------- Source figures (real visuals from the reading, never generated) ----------
+
+CAPTION_RE = re.compile(r"\s*(Figure|Fig\.|Table|Chart|Exhibit)\s*\d+([.\-]\d+)?", re.I)
+
+
+def extract_figures(pdf_bytes: bytes, limit: int = 16) -> list[dict]:
+    """Find captioned figures in a PDF and crop them (drawings + images + caption) to PNG."""
+    figs: list[dict] = []
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return figs
+    for page in doc:
+        if len(figs) >= limit:
+            break
+        blocks = [b for b in page.get_text("blocks") if CAPTION_RE.match(b[4])]
+        if not blocks:
+            continue
+        try:
+            shapes = [r for r in page.cluster_drawings() if r.width * r.height > 3000]
+        except Exception:
+            shapes = []
+        for img in page.get_images():
+            try:
+                shapes += [r for r in page.get_image_rects(img[0]) if r.width * r.height > 3000]
+            except Exception:
+                pass
+        for b in blocks:
+            cap = pymupdf.Rect(b[:4])
+            # Graphics that sit just above (or around) the caption belong to this figure.
+            near = [r for r in shapes if r.y1 <= cap.y1 + 4 and cap.y0 - r.y1 < 60
+                    and r.x1 > cap.x0 and r.x0 < cap.x1]
+            if not near:
+                continue
+            region = pymupdf.Rect(cap)
+            for r in near:
+                region |= r
+            for r in shapes:  # pull in pieces of the same figure
+                if r.intersects(region):
+                    region |= r
+            if region.height < 40:
+                continue
+            region = (region + (-6, -6, 6, 6)) & page.rect
+            png = page.get_pixmap(clip=region, dpi=144).tobytes("png")
+            caption = " ".join(b[4].split())[:220]
+            figs.append({
+                "id": f"F{len(figs) + 1}",
+                "page": page.number + 1,
+                "caption": caption,
+                "data_url": "data:image/png;base64," + base64.b64encode(png).decode(),
+            })
+    return figs
+
 
 
 @app.post("/api/ingest")
 async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: int = Form(8)):
     n = max(3, min(n, 12))
     parts: list = []
+    figures: list[dict] = []
     if file is not None and file.filename:
         data = await file.read()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large (20 MB max).")
         mime = file.content_type or "application/pdf"
+        if mime == "application/pdf":
+            figures = extract_figures(data)
         if mime == "text/plain":
             parts.append(data.decode("utf-8", errors="ignore"))
         else:
@@ -88,7 +157,8 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
     else:
         raise HTTPException(400, "Upload a file or paste some text.")
 
-    parts.append(DIGEST_PROMPT.format(n=n))
+    fig_list = "\n".join(f"- {f['id']} (p.{f['page']}): {f['caption']}" for f in figures) or "(none)"
+    parts.append(DIGEST_PROMPT.format(n=n, figures=fig_list))
     try:
         resp = client().models.generate_content(
             model=DIGEST_MODEL,
@@ -104,7 +174,16 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
     except Exception as e:  # surface model errors to the UI
         raise HTTPException(502, f"Gemini error: {e}")
     deck = resp.parsed if isinstance(resp.parsed, Deck) else Deck.model_validate_json(resp.text)
-    return deck.model_dump()
+    out = deck.model_dump()
+    by_id = {f["id"]: f for f in figures}
+    used = set()
+    for c in out["concepts"]:
+        f = by_id.get(c.pop("figure_id", "").strip())
+        if f and f["id"] not in used:
+            used.add(f["id"])
+            c["figure"] = {k: f[k] for k in ("page", "caption", "data_url")}
+    out["figures_found"] = len(figures)
+    return out
 
 
 # ---------- Tutor (Gemma 4) ----------
@@ -118,13 +197,14 @@ def tutor_instructions() -> str:
         return "You are a strict but kind study tutor. Only use the provided source text."
 
 
-def ask_gemma(prompt: str) -> dict:
+def ask_gemma(prompt: str, thinking: str = "minimal") -> dict:
     try:
         resp = client().models.generate_content(
             model=TUTOR_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                system_instruction=tutor_instructions(), temperature=0.3
+                system_instruction=tutor_instructions(), temperature=0.3,
+                thinking_config=types.ThinkingConfig(thinking_level=thinking),
             ),
         )
     except HTTPException:
@@ -158,7 +238,8 @@ def quiz(req: QuizReq):
     )
     prompt = f"""TASK: quiz
 For EACH concept below write one multiple-choice recall question that tests understanding
-(not trivia). 4 options, exactly one correct. Wrong options must be plausible misconceptions.
+(not trivia). 4 options, exactly one correct. Wrong options must be plausible misconceptions
+a confused student might actually believe: no joke or absurd options. Vary the position of the correct answer.
 
 Return ONLY JSON: {{"questions": [{{"concept_index": int, "question": str,
 "options": [str, str, str, str], "answer_index": int, "explanation": str}}]}}
@@ -212,7 +293,7 @@ STUDENT EXPLANATION:
 Return ONLY JSON: {{"score": int 0-100, "verdict": "nailed it" | "almost" | "not yet",
 "got_right": [str], "missed": [str], "misconceptions": [str],
 "tip": str (one sentence, encouraging, what to say next time)}}"""
-    out = ask_gemma(prompt)
+    out = ask_gemma(prompt, thinking=os.environ.get("GRADER_THINKING", "minimal"))
     try:
         score = max(0, min(100, int(out.get("score", 0))))
     except (TypeError, ValueError):

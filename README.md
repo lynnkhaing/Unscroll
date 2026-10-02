@@ -17,10 +17,14 @@ At San Francisco State University, most students commute, many are first-generat
 PDF / image / text
       │
       ▼
-Gemini 2.5 Flash ── multimodal read → structured JSON (concepts, 30-s scripts, key points, verbatim quote + page)
+PyMuPDF ── crops the reading's REAL captioned figures (Figure 8.x, tables, charts)
       │
       ▼
-Swipe feed (scroll-snap) ── narrated reels with karaoke captions + page citations
+Gemini Flash ── multimodal read → structured JSON (concepts, 30-s scripts, key points,
+      │          verbatim quote + page, and which source figure illustrates each concept)
+      │
+      ▼
+Swipe feed (scroll-snap) ── narrated reels + original figures + karaoke captions + page citations
       │
       ├─► Gemma 4 /api/quiz       → recall MCQs with misconception distractors
       ├─► Gemma 4 /api/teachback  → grades the student's typed or spoken explanation ONLY against the source
@@ -30,7 +34,7 @@ Swipe feed (scroll-snap) ── narrated reels with karaoke captions + page cita
 ## Models (open-weight + Gemini)
 | Role | Model | Access | License / terms |
 |---|---|---|---|
-| Digest (multimodal PDF → concepts) | `gemini-2.5-flash` | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
+| Digest (multimodal PDF → concepts) | `gemini-3.8-flash` | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
 | Tutor (quiz + teach-back grading) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
 
 Why we split it this way: Gemini handles the heavy multimodal reading once per document. Gemma 4 is the open-weight tutor that runs on every student interaction. Because Gemma's weights are open, the tutor can run **on-device or on SFSU infrastructure** (for example through Ollama), so students' answers never have to leave campus. To swap models, set `TUTOR_MODEL` / `DIGEST_MODEL`.
@@ -41,7 +45,7 @@ Gemma integration is in [`app.py`](app.py) (`ask_gemma`, `/api/quiz`, `/api/teac
 The tutor's behavior is packaged as an [Agent Skill](https://agentskills.io/) at [`skills/unscroll-tutor/SKILL.md`](skills/unscroll-tutor/SKILL.md). The app loads it as Gemma's system instruction at runtime, and any skills-compatible agent can reuse it to quiz students on a source and grade their explanations.
 
 ## Google tools used
-- **Gemini API** (Gemini 2.5 Flash + Gemma 4), with keys from **Google AI Studio**
+- **Gemini API** (Gemini 3.8 Flash + Gemma 4), with keys from **Google AI Studio**
 - **Cloud Run**, which hosts the app and is paid for with the hackathon Google Cloud credits
 
 ## Run locally
@@ -61,6 +65,7 @@ gcloud run deploy unscroll --source . --region us-west1 --allow-unauthenticated 
 ## Responsible AI
 | Risk | What we do |
 |---|---|
+| Fake or misleading visuals | We never generate images. Visuals are only the reading's own figures, cropped unedited and labeled "FROM YOUR READING · p.N". Narration and scripts are labeled as AI-generated. |
 | Hallucination | Every reel shows a verbatim quote and page number. Prompts forbid outside facts. Teach-back is graded only against the source. |
 | Privacy | Uploads are processed in memory and never stored. There are no accounts, and the review queue lives in the student's own browser. The Gemma tutor can be self-hosted. |
 | Bias / language | The grader is told to ignore grammar, spelling, and transcription errors so ESL students aren't penalized. Scripts are written at a 9th-grade reading level. |
