@@ -282,7 +282,7 @@ def _digest_worker(parts, figures, n, put, source=""):
     # under load, so it's the fallback.
     routes = [(vertex, m) for m in DIGEST_FALLBACKS[:2]] + [(client, m) for m in DIGEST_FALLBACKS]
     for make, model in routes:
-        for thinking in (types.ThinkingConfig(thinking_level="low"), None):
+        for thinking in (types.ThinkingConfig(thinking_level="minimal"), types.ThinkingConfig(thinking_level="low"), None):
             try:
                 buf, deck_sent = "", False
                 cfg = types.GenerateContentConfig(temperature=0.4, thinking_config=thinking)
