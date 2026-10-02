@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .DS_Store
 static/demo-deck.json
+static/_test.pdf

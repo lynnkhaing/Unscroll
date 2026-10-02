@@ -102,6 +102,31 @@
   .model-tag { font-size: 11px; color: var(--muted); margin-top: 8px; }
   .big-stat { font-size: 56px; font-weight: 800; line-height: 1; }
   @media (prefers-reduced-motion: reduce) { .emoji, .swipe-hint, .spinner { animation: none; } }
+  /* visuals */
+  .vis { margin: 0 0 12px; }
+  .fig.photo { padding: 0; overflow: hidden; background: #000; }
+  .fig.photo img { max-height: 30vh; object-fit: cover; }
+  .fig.photo figcaption { color: #e5e5e5; background: rgba(0,0,0,.65); padding: 6px 8px; margin: 0; }
+  .fig.photo figcaption a { color: #fff; }
+  .fig .src.wiki { background: #0369a1; }
+  .fig .src.ai { background: #7c3aed; }
+  .vis-loading { height: 24vh; border-radius: 14px; background: linear-gradient(100deg, rgba(255,255,255,.08) 30%, rgba(255,255,255,.22) 50%, rgba(255,255,255,.08) 70%);
+    background-size: 300% 100%; animation: shimmer 1.4s linear infinite; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+  .vis-loading span { font-size: 64px; }
+  .vis-loading small { font-size: 12px; opacity: .85; }
+  @keyframes shimmer { to { background-position: -150% 0; } }
+  .vis .emoji { margin: 0; }
+  .reel h2 { font-size: 26px; margin-bottom: 12px; }
+  .reel .caption { font-size: 17px; line-height: 1.42; }
+  .reel .cite { margin-top: 10px; }
+  .vstate { white-space: nowrap; }
+  .loader-card { background: #000; color: var(--muted); align-items: center; text-align: center; gap: 14px; }
+  .loader-card .spinner { width: 34px; height: 34px; }
+  .side button.attn { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(1.12); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 20; background: #222; color: #fff;
+    padding: 10px 16px; border-radius: 999px; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  @media (prefers-reduced-motion: reduce) { .vis-loading, .side button.attn { animation: none; } }
 </style>
 </head>
 <body>
@@ -138,7 +163,7 @@
     <div id="reviewList" class="small">Nothing to review yet. Concepts you miss will come back here.</div>
   </section>
 
-  <p class="small">Digest: Gemini Flash · Tutor: Gemma 4 (open-weight) · Your uploads are processed in memory and not stored.</p>
+  <p class="small">Digest + voice: Gemini · Tutor + image check: Gemma 4 (open-weight) · Visuals: your reading → Wikimedia Commons → labeled AI illustration · Uploads are processed in memory, never stored.</p>
 </main>
 
 <!-- ================= FEED ================= -->
@@ -170,9 +195,11 @@ Latané and Darley proposed a five-step decision model of helping: notice the ev
 
 The effect can be reduced. Singling out one person ("You in the red jacket, call 911") removes diffusion of responsibility. Knowing about the bystander effect itself also makes people more likely to help. Training such as first aid courses increases the "know how to help" step. Group cohesion matters too: people help more when bystanders are friends rather than strangers.`;
 
-let deck = null, items = [], quizzes = [], muted = false, stats = { correct: 0, answered: 0, teach: [] };
-
-const lean = ({ figure, ...c }) => c;
+const JSON_H = { "Content-Type": "application/json" };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const lean = ({ figure, visual, ...c }) => c;
+let deck = null, muted = false, stats = null, feedIO = null, current = null, finished = true, reviewMode = false;
+const feed = $("#feed");
 
 /* ---------------- storage (review queue) ---------------- */
 function loadQueue() { try { return JSON.parse(localStorage.getItem("unscroll.review") || "[]"); } catch { return []; } }
@@ -189,7 +216,7 @@ function renderReview() {
   if (!q.length) { list.textContent = "Nothing to review yet. Concepts you miss will come back here."; btn.classList.add("hidden"); return; }
   const now = Date.now();
   list.innerHTML = q.map(x => {
-    const d = new Date(x.due), isDue = d.getTime() <= now;
+    const isDue = new Date(x.due).getTime() <= now;
     return `<div class="review-item"><span>${esc(x.concept.emoji)} ${esc(x.concept.title)} <span class="small">· ${esc(x.deck)}</span></span>
       <span class="pill">${isDue ? "Due now" : "Due tomorrow"}</span></div>`;
   }).join("");
@@ -208,20 +235,31 @@ $("#sampleBtn").onclick = () => { pickedFile = null; $("#fname").textContent = "
 $("#goBtn").onclick = generate;
 $("#reviewBtn").onclick = () => {
   const q = loadQueue(); if (!q.length) return;
-  deck = { deck_title: "Review", subject: "Spaced review", concepts: q.map(x => x.concept) };
-  startFeed(true);
+  unlockAudio();
+  openFeed({ deck_title: "Your spaced review", subject: "Review", concepts: [] }, true);
+  q.forEach(x => addConcept({ ...x.concept }));
+  finishFeed();
 };
-$("#backBtn").onclick = () => { speechSynthesis.cancel(); $("#feedWrap").classList.add("hidden"); $("#home").classList.remove("hidden"); renderReview(); };
+$("#backBtn").onclick = backHome;
 $("#muteBtn").onclick = () => {
   muted = !muted; $("#muteBtn").textContent = muted ? "🔇 Muted" : "🔊 Sound on";
-  $("#muteBtn").setAttribute("aria-pressed", muted); if (muted) speechSynthesis.cancel(); else playCurrent();
+  $("#muteBtn").setAttribute("aria-pressed", muted);
+  if (muted) { stopAudio(); feed.querySelectorAll(".caption").forEach(c => c.classList.add("static")); }
+  else if (current?.dataset.reel !== undefined) playReel(current, +current.dataset.reel, true);
 };
+function backHome() {
+  stopAudio(); finished = true;
+  $("#feedWrap").classList.add("hidden"); $("#home").classList.remove("hidden"); renderReview();
+}
 
 function setStatus(html, isErr) {
   const s = $("#status"); s.classList.remove("hidden");
   s.innerHTML = isErr ? `<div class="err">⚠️ ${esc(html)}</div>` : `<div class="loading"><div class="spinner"></div><span>${html}</span></div>`;
 }
-
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 4000);
+}
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
@@ -229,121 +267,189 @@ async function api(path, opts) {
   return j;
 }
 
+/* ---------------- streaming ingest ---------------- */
 async function generate() {
   const text = $("#text").value.trim();
   if (!pickedFile && !text) return setStatus("Add a PDF or paste some text first.", true);
-  // Unlock speech synthesis while we still have the user gesture.
-  try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch {}
+  unlockAudio();
   $("#goBtn").disabled = true;
-  const msgs = ["Uploading… 📤", "Gemini is reading your reading… 📖", "Pulling the real figures from your PDF… 🖼️", "Finding the big ideas… 💡", "Writing your reels… 🎬", "Matching figures to concepts… 🧩", "Almost there… ✨", "Big reading! Still working… ⏳"];
-  let i = 0; setStatus(msgs[0]);
-  const t = setInterval(() => setStatus(msgs[Math.min(++i, msgs.length - 1)]), 7000);
+  setStatus(pickedFile ? "Reading your PDF and pulling its real figures… 📖" : "Reading your text… 📖");
+  const fd = new FormData();
+  if (pickedFile) fd.append("file", pickedFile); else fd.append("text", text);
+  fd.append("n", "8");
+  let started = false;
+  const start = (d) => { if (!started) { started = true; openFeed({ deck_title: d.deck_title || "Your reading", subject: d.subject || "", concepts: [] }, false); } };
   try {
-    const fd = new FormData();
-    if (pickedFile) fd.append("file", pickedFile); else fd.append("text", text);
-    fd.append("n", "8");
-    deck = await api("/api/ingest", { method: "POST", body: fd });
-    clearInterval(t);
-    startFeed(false);
+    const r = await fetch("/api/ingest", { method: "POST", body: fd });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || `Request failed (${r.status})`); }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let m; try { m = JSON.parse(line); } catch { continue; }
+        if (m.type === "deck") { if (started) updateIntro(m); else start(m); }
+        else if (m.type === "concept") { start({}); addConcept(m.concept); }
+        else if (m.type === "done") { if (m.warning) toast("Gemini stopped early — showing what we have."); finishFeed(); }
+        else if (m.type === "error") throw new Error(m.detail);
+      }
+    }
+    if (!started || !deck.concepts.length) throw new Error("No reels came back. Please retry.");
+    finishFeed();
   } catch (e) {
-    clearInterval(t); setStatus(e.message, true);
+    if (started && deck?.concepts.length) { finishFeed(); toast("Connection hiccup — showing the reels we got."); }
+    else { if (started) backHome(); setStatus(e.message, true); }
   } finally { $("#goBtn").disabled = false; }
 }
 
-/* ---------------- feed ---------------- */
-function startFeed(isReview) {
+/* ---------------- feed building (progressive) ---------------- */
+function openFeed(d, isReview) {
+  deck = d; reviewMode = isReview; finished = false; current = null;
   stats = { correct: 0, answered: 0, teach: [] };
-  quizzes = [];
-  // Layout: R R Q R T R R Q R T ... — quiz after every 2 reels, teach-back every 4th.
-  items = [{ type: "intro", isReview }];
-  deck.concepts.forEach((c, i) => {
-    items.push({ type: "reel", i });
-    if (i % 2 === 1) items.push({ type: "quiz", i: i - 1 + (i % 4 === 1 ? 0 : 1) });
-    if (i % 4 === 2 || (isReview && deck.concepts.length < 3)) items.push({ type: "teach", i });
-  });
-  items.push({ type: "end" });
+  visQ.length = 0;
+  feed.innerHTML = ""; feed.scrollTop = 0;
   $("#home").classList.add("hidden"); $("#status").classList.add("hidden");
   $("#feedWrap").classList.remove("hidden");
-  renderFeed();
-  // Quizzes come from Gemma in the background while the student watches the first reels.
-  api("/api/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ concepts: deck.concepts.map(lean) }) })
-    .then(r => { quizzes = r.questions; document.querySelectorAll(".quiz").forEach(fillQuiz); })
-    .catch(e => document.querySelectorAll(".quiz .qbody").forEach(el => el.innerHTML = `<p class="err">Couldn't load quiz: ${esc(e.message)}</p>`));
+  feedIO?.disconnect();
+  feedIO = new IntersectionObserver(onVisible, { root: feed, threshold: 0.6 });
+  place(introCard());
+  if (!isReview) {
+    const l = document.createElement("section");
+    l.className = "card loader-card"; l.id = "loaderCard";
+    l.innerHTML = `<div class="spinner"></div><div>Gemini is writing the next reel…</div>`;
+    feed.appendChild(l); feedIO.observe(l);
+  }
+}
+function place(el) {
+  const loader = $("#loaderCard");
+  loader ? feed.insertBefore(el, loader) : feed.appendChild(el);
+  feedIO.observe(el); updateProgress();
+  return el;
+}
+function introCard() {
+  const el = document.createElement("section"), [a, b] = GRADIENTS[0];
+  el.className = "card reel intro";
+  el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
+    <div class="kicker">${esc(reviewMode ? "Spaced review" : (deck.subject || "Your reading"))}</div>
+    <div class="emoji">🌀</div>
+    <h2 style="font-size:32px">${esc(deck.deck_title)}</h2>
+    <div class="caption static">Short reels with real figures, quick checks, and a teach-back. Swipe up to start.</div>
+    <div class="swipe-hint">swipe up ↑</div>`;
+  return el;
+}
+function updateIntro(m) {
+  deck.deck_title = m.deck_title || deck.deck_title; deck.subject = m.subject || deck.subject;
+  const intro = feed.querySelector(".intro");
+  if (intro) { $("h2", intro).textContent = deck.deck_title; $(".kicker", intro).textContent = deck.subject; }
+}
+function addConcept(c) {
+  const i = deck.concepts.length;
+  deck.concepts.push(c);
+  place(reelCard(i));
+  if (reviewMode) { place(quizCard(i)); }
+  else {
+    if (i % 2 === 1) place(quizCard(i - 1 + (i % 4 === 1 ? 0 : 1)));
+    if (i % 4 === 2) place(teachCard(i));
+  }
+  if (!c.figure && !c.visual) queueVisual(i);
+  if (i < 2) getTTS(c);  // first reels get their voice ready while the student reads the intro
+}
+function finishFeed() {
+  if (finished) return;
+  finished = true;
+  $("#loaderCard")?.remove();
+  const el = document.createElement("section");
+  el.className = "card endcard";
+  el.innerHTML = `<div class="kicker" style="color:#86efac">Done</div><div class="endbody"></div>`;
+  place(el); renderEnd();
+}
+function updateProgress() {
+  if (!current) return;
+  const cards = [...feed.children], idx = cards.indexOf(current);
+  $("#progress").style.width = `${(100 * (idx + 1)) / cards.length}%`;
 }
 
-function renderFeed() {
-  const feed = $("#feed"); feed.innerHTML = ""; feed.scrollTop = 0;
-  items.forEach((it, idx) => {
-    const el = document.createElement("section"); el.className = "card"; el.dataset.idx = idx;
-    if (it.type === "intro") {
-      const [a, b] = GRADIENTS[0];
-      el.classList.add("reel");
-      el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
-        <div class="kicker">${it.isReview ? "Spaced review" : esc(deck.subject)}</div>
-        <div class="emoji">🌀</div>
-        <h2>${esc(deck.deck_title)}</h2>
-        <div class="caption static">${deck.concepts.length} ideas · ~${Math.ceil(deck.concepts.length * 0.6)} min · quizzes along the way.</div>
-        <div class="swipe-hint">swipe up ↑</div>`;
-    } else if (it.type === "reel") {
-      const c = deck.concepts[it.i], [a, b] = GRADIENTS[(it.i + 1) % GRADIENTS.length];
-      el.classList.add("reel"); el.dataset.reel = it.i;
-      const f = c.figure;
-      if (f) el.classList.add("has-fig");
-      const figHtml = f ? `<figure class="fig"><img src="${f.data_url}" alt="${esc(f.caption)}" loading="lazy">
-          <figcaption><span class="src">FROM YOUR READING · p.${esc(f.page)}</span>original figure, unedited</figcaption></figure>` : "";
-      const words = c.script.split(/\s+/).map((w, k) => `<span class="w" data-k="${k}">${esc(w)}</span>`).join(" ");
-      el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
-        <div class="kicker">${it.i + 1} / ${deck.concepts.length}</div>
-        ${f ? "" : `<div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>`}
-        <h2>${esc(f ? c.emoji + " " + c.title : c.title)}</h2>
-        ${figHtml}
-        <div class="caption">${words}</div>
-        <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
-        <div class="ai-note">Script &amp; voice are AI-generated from your reading · visuals are only real figures from the source</div>
-        <div class="side">
-          <button type="button" class="replay" aria-label="Replay narration">↻</button>
-          <button type="button" class="save" aria-label="Save to review queue">🔖</button>
-        </div>`;
-      $(".replay", el).onclick = () => speakReel(el, c, true);
-      $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
-    } else if (it.type === "quiz") {
-      el.classList.add("quiz"); el.dataset.ci = it.i;
-      el.innerHTML = `<div class="kicker" style="color:#c9bcff">⚡ Quick check</div>
-        <div class="qbody"><div class="loading"><div class="spinner"></div><span>Gemma is writing your question…</span></div></div>`;
-      if (quizzes.length) fillQuiz(el);
-    } else if (it.type === "teach") {
-      const c = deck.concepts[it.i];
-      el.classList.add("teach");
-      el.innerHTML = `<div class="kicker" style="color:#ffb35c">🎤 Teach it back</div>
-        <h3>Explain <em>${esc(c.title)}</em> like you're telling a friend.</h3>
-        <textarea placeholder="Type, or tap 🎙️ and say it out loud…" aria-label="Your explanation"></textarea>
-        <div class="row" style="margin-top:10px">
-          <button class="btn ghost mic" type="button">🎙️ Speak</button>
-          <button class="btn check" type="button">Check me</button>
-        </div>
-        <div class="out"></div>`;
-      setupTeach(el, c);
-    } else {
-      el.classList.add("endcard");
-      el.innerHTML = `<div class="kicker" style="color:#86efac">Done</div><div class="endbody"></div>`;
-    }
-    feed.appendChild(el);
-  });
-  observe();
+/* ---------------- reel cards + visuals ---------------- */
+function reelCard(i) {
+  const c = deck.concepts[i], [a, b] = GRADIENTS[(i + 1) % GRADIENTS.length];
+  const el = document.createElement("section");
+  el.className = "card reel"; el.dataset.reel = i;
+  const words = c.script.split(/\s+/).map((w, k) => `<span class="w" data-k="${k}">${esc(w)}</span>`).join(" ");
+  const v = c.figure || c.visual;
+  el.innerHTML = `<div class="bgfx" style="background:linear-gradient(160deg,${a},${b})"></div>
+    <h2>${esc(c.emoji)} ${esc(c.title)}</h2>
+    <div class="vis">${v ? visHtml(v) : `<div class="vis-loading"><span>${esc(c.emoji)}</span><small>Finding a real image…</small></div>`}</div>
+    <div class="caption${muted ? " static" : ""}">${words}</div>
+    <div class="cite">📌 p.${esc(c.page)} — “${esc(c.source_quote)}”</div>
+    <div class="ai-note">Script &amp; voice are AI-generated from your reading · <span class="vstate">🎧 voice: waiting</span></div>
+    <div class="side">
+      <button type="button" class="replay" aria-label="Play narration">▶</button>
+      <button type="button" class="save" aria-label="Save to review queue">🔖</button>
+    </div>`;
+  $(".replay", el).onclick = () => playReel(el, i, true);
+  $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
+  return el;
+}
+function visHtml(v) {
+  if (v.kind === "source") return `<figure class="fig"><img src="${v.src}" alt="${esc(v.caption)}">
+      <figcaption><span class="src">FROM YOUR READING · p.${esc(v.page)}</span>original figure, unedited</figcaption></figure>`;
+  if (v.kind === "wikimedia") return `<figure class="fig photo"><img src="${esc(v.src)}" alt="${esc(v.title)}" referrerpolicy="no-referrer">
+      <figcaption><span class="src wiki">📷 WIKIMEDIA COMMONS</span><a href="${esc(v.page_url)}" target="_blank" rel="noopener">${esc(v.title)}</a> · ${esc(v.author)} · ${esc(v.license)}</figcaption></figure>`;
+  if (v.kind === "ai") return `<figure class="fig photo"><img src="${v.src}" alt="AI-generated illustration">
+      <figcaption><span class="src ai">✨ AI-GENERATED ILLUSTRATION</span>by Gemini · not from your reading</figcaption></figure>`;
+  return "";
+}
+const visQ = []; let visActive = 0;
+function queueVisual(i) { visQ.push([deck, i]); pumpVis(); }
+function pumpVis() {
+  while (visActive < 2 && visQ.length) {
+    const [d, i] = visQ.shift();
+    if (d !== deck) continue;
+    const c = d.concepts[i];
+    visActive++;
+    api("/api/visual", { method: "POST", headers: JSON_H, body: JSON.stringify({
+      title: c.title, script: c.script, subject: d.subject || "", image_query: c.image_query || "", image_prompt: c.image_prompt || "" }) })
+      .then(v => {
+        if (v.kind && v.kind !== "none") c.visual = v;
+        else if (!c._visRetry) { c._visRetry = 1; setTimeout(() => { if (d === deck) { visQ.push([d, i]); pumpVis(); } }, 20000); }
+      })
+      .catch(() => {})
+      .finally(() => { visActive--; if (d === deck) renderVis(i); pumpVis(); });
+  }
+}
+function renderVis(i) {
+  const box = feed.querySelector(`.reel[data-reel="${i}"] .vis`); if (!box) return;
+  const c = deck.concepts[i];
+  if (!c.visual && c._visRetry === 1 && !c._visShown) { c._visShown = 1; return; }  // keep shimmer while we retry
+  box.innerHTML = c.visual ? visHtml(c.visual) : `<div class="emoji" aria-hidden="true">${esc(c.emoji)}</div>`;
 }
 
-function fillQuiz(el) {
-  const ci = +el.dataset.ci;
-  const q = quizzes.find(x => x.concept_index === ci) || quizzes[ci];
+/* ---------------- quiz + teach-back (Gemma 4) ---------------- */
+function quizCard(ci) {
+  const el = document.createElement("section");
+  el.className = "card quiz"; el.dataset.ci = ci;
+  el.innerHTML = `<div class="kicker" style="color:#c9bcff">⚡ Quick check</div>
+    <div class="qbody"><div class="loading"><div class="spinner"></div><span>Gemma is writing your question…</span></div></div>`;
+  const d = deck;
+  api("/api/quiz", { method: "POST", headers: JSON_H, body: JSON.stringify({ concepts: [lean(d.concepts[ci])] }) })
+    .then(r => fillQuiz(el, r.questions[0], d.concepts[ci]))
+    .catch(e => { $(".qbody", el).innerHTML = `<p class="err">Couldn't load quiz: ${esc(e.message)}</p>`; });
+  return el;
+}
+function fillQuiz(el, q, c) {
   const body = $(".qbody", el);
   if (!q) { body.innerHTML = `<p class="small">No question for this one — keep scrolling.</p>`; return; }
-  if (body.dataset.filled) return; body.dataset.filled = "1";
   body.innerHTML = `<h3>${esc(q.question)}</h3>` +
     q.options.map((o, k) => `<button type="button" class="opt" data-k="${k}">${"ABCD"[k]}. ${esc(o)}</button>`).join("") +
     `<div class="feedback"></div><div class="model-tag">Question by Gemma 4</div>`;
   body.querySelectorAll(".opt").forEach(b => b.onclick = () => {
     if (body.dataset.done) return; body.dataset.done = "1";
-    const k = +b.dataset.k, ok = k === q.answer_index, c = deck.concepts[ci];
+    const k = +b.dataset.k, ok = k === q.answer_index;
     body.querySelectorAll(".opt")[q.answer_index].classList.add("right");
     if (!ok) b.classList.add("wrong");
     stats.answered++; if (ok) { stats.correct++; removeFromReview(c.title); } else addToReview(c, "missed quiz");
@@ -351,7 +457,20 @@ function fillQuiz(el) {
     renderEnd();
   });
 }
-
+function teachCard(i) {
+  const c = deck.concepts[i], el = document.createElement("section");
+  el.className = "card teach";
+  el.innerHTML = `<div class="kicker" style="color:#ffb35c">🎤 Teach it back</div>
+    <h3>Explain <em>${esc(c.title)}</em> like you're telling a friend.</h3>
+    <textarea placeholder="Type, or tap 🎙️ and say it out loud…" aria-label="Your explanation"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost mic" type="button">🎙️ Speak</button>
+      <button class="btn check" type="button">Check me</button>
+    </div>
+    <div class="out"></div>`;
+  setupTeach(el, c);
+  return el;
+}
 function setupTeach(el, c) {
   const ta = $("textarea", el), mic = $(".mic", el), out = $(".out", el);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -359,12 +478,11 @@ function setupTeach(el, c) {
   let rec = null;
   mic.onclick = () => {
     if (rec) { rec.stop(); return; }
-    speechSynthesis.cancel();
+    stopAudio();
     rec = new SR(); rec.lang = "en-US"; rec.interimResults = true; rec.continuous = true;
     const base = ta.value ? ta.value + " " : "";
     rec.onresult = e => { ta.value = base + Array.from(e.results).map(r => r[0].transcript).join(" "); };
-    rec.onend = () => { rec = null; mic.textContent = "🎙️ Speak"; };
-    rec.onerror = () => { rec = null; mic.textContent = "🎙️ Speak"; };
+    rec.onend = rec.onerror = () => { rec = null; mic.textContent = "🎙️ Speak"; };
     rec.start(); mic.textContent = "⏹ Stop";
   };
   $(".check", el).onclick = async () => {
@@ -372,7 +490,7 @@ function setupTeach(el, c) {
     const btn = $(".check", el); btn.disabled = true;
     out.innerHTML = `<div class="loading" style="margin-top:12px"><div class="spinner"></div><span>Gemma is grading against the source…</span></div>`;
     try {
-      const r = await api("/api/teachback", { method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await api("/api/teachback", { method: "POST", headers: JSON_H,
         body: JSON.stringify({ concept: lean(c), explanation: ta.value }) });
       const color = r.score >= 80 ? "var(--good)" : r.score >= 50 ? "var(--mid)" : "var(--bad)";
       const li = a => a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
@@ -391,7 +509,6 @@ function setupTeach(el, c) {
     finally { btn.disabled = false; }
   };
 }
-
 function renderEnd() {
   const el = $(".endcard .endbody"); if (!el) return;
   const q = loadQueue();
@@ -409,55 +526,148 @@ function renderEnd() {
     <button class="btn" type="button" onclick="document.getElementById('backBtn').click()">Back home</button>`;
 }
 
-/* ---------------- narration + scroll tracking ---------------- */
-let current = null;
-function observe() {
-  const io = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (!e.isIntersecting) return;
-      current = e.target;
-      const idx = +current.dataset.idx;
-      $("#progress").style.width = `${(100 * (idx + 1)) / items.length}%`;
-      if (current.classList.contains("endcard")) renderEnd();
-      playCurrent();
-    });
-  }, { root: $("#feed"), threshold: 0.6 });
-  document.querySelectorAll("#feed .card").forEach(c => io.observe(c));
+/* ---------------- narration: streamed Gemini TTS (Web Audio) with karaoke captions ---------------- */
+const RATE = 24000;
+let actx = null;
+function ensureCtx() {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+    if (actx.state === "suspended") actx.resume();
+  } catch {}
+  return actx;
 }
-function playCurrent() {
-  speechSynthesis.cancel();
-  if (!current || current.dataset.reel === undefined) return;
-  if (muted) { current.querySelector(".caption").classList.add("static"); return; }
-  const c = deck.concepts[+current.dataset.reel];
-  speakReel(current, c, false);
+function unlockAudio() {  // must run inside a click so later playback is allowed (Safari/iOS)
+  const ctx = ensureCtx();
+  try { const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, RATE); s.connect(ctx.destination); s.start(); } catch {}
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch {}
+}
+function narration(c) { return `${c.title}. ${c.script}`; }
+
+// Each narration is one TTS stream; chunks are kept so replays and the prefetched next reel play instantly.
+const tts = new Map();  // text -> { chunks: Float32Array[], done, failed, listeners:Set }
+function getTTS(c) {
+  const text = narration(c);
+  let e = tts.get(text);
+  if (e && !e.failed) return e;
+  e = { chunks: [], done: false, failed: false, listeners: new Set() };
+  tts.set(text, e);
+  const notify = () => e.listeners.forEach(f => f());
+  (async () => {
+    try {
+      const r = await fetch("/api/tts", { method: "POST", headers: JSON_H, body: JSON.stringify({ text }) });
+      if (!r.ok || !r.body) throw new Error("tts " + r.status);
+      const reader = r.body.getReader();
+      let carry = null, pend = [], pendLen = 0;
+      const flush = () => {
+        if (!pendLen) return;
+        const bytes = new Uint8Array(pendLen); let o = 0;
+        pend.forEach(p => { bytes.set(p, o); o += p.length; });
+        pend = []; pendLen = 0;
+        const dv = new DataView(bytes.buffer), f = new Float32Array(bytes.length / 2);
+        for (let k = 0; k < f.length; k++) f[k] = dv.getInt16(k * 2, true) / 32768;
+        e.chunks.push(f); notify();
+      };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        let b = value;
+        if (carry) { const m = new Uint8Array(carry.length + b.length); m.set(carry); m.set(b, carry.length); b = m; carry = null; }
+        if (b.length % 2) { carry = b.slice(-1); b = b.slice(0, -1); }
+        pend.push(b); pendLen += b.length;
+        if (pendLen >= 9600) flush();  // ~200 ms per scheduled buffer
+      }
+      flush();
+      if (!e.chunks.length) throw new Error("empty");
+    } catch { e.failed = true; }
+    e.done = true; notify();
+  })();
+  return e;
+}
+
+let playToken = 0, raf = 0, sources = [];
+function stopAudio() {
+  playToken++; cancelAnimationFrame(raf);
+  sources.forEach(s => { try { s.stop(); } catch {} }); sources = [];
+  try { speechSynthesis.cancel(); } catch {}
+}
+function setVState(el, s) { const v = $(".vstate", el); if (v) v.textContent = s; }
+
+function playReel(el, i, force) {
+  stopAudio();
+  const c = deck.concepts[i];
+  $(".replay", el).classList.remove("attn");
+  if (muted && !force) return;
+  const ctx = ensureCtx(), tok = playToken, e = getTTS(c);
+  const nx = deck.concepts[i + 1];
+  const words = el.querySelectorAll(".caption .w"), cap = $(".caption", el);
+  cap.classList.remove("static"); words.forEach(w => w.classList.remove("on"));
+  setVState(el, "🎧 voice: Gemini TTS starting…");
+  if (ctx && ctx.state !== "running") { setVState(el, "▶ tap play to listen"); $(".replay", el).classList.add("attn"); cap.classList.add("static"); return; }
+
+  const text = narration(c), titleLen = c.title.length + 2, starts = []; let pos = 0;
+  c.script.split(/\s+/).forEach(w => { const at = c.script.indexOf(w, pos); starts.push(at); pos = at + w.length; });
+  let t0 = null, next = 0, scheduled = 0, started = false;
+  const pump = () => {
+    if (tok !== playToken) return;
+    while (scheduled < e.chunks.length) {
+      const f = e.chunks[scheduled++], buf = ctx.createBuffer(1, f.length, RATE);
+      buf.getChannelData(0).set(f);
+      const s = ctx.createBufferSource(); s.buffer = buf; s.connect(ctx.destination);
+      if (t0 === null) { t0 = ctx.currentTime + 0.05; next = t0; }
+      if (next < ctx.currentTime) next = ctx.currentTime + 0.02;  // network underrun: resume cleanly
+      s.start(next); next += buf.duration; sources.push(s);
+      if (!started) { started = true; setVState(el, "🔊 voice: Gemini TTS"); raf = requestAnimationFrame(tick); }
+    }
+    if (e.done) {
+      e.listeners.delete(pump);
+      if (e.failed && !started) { setVState(el, "🗣️ voice: device (Gemini TTS busy)"); speakBrowser(el, c); }
+      if (nx) getTTS(nx);  // this clip is fully generated: start the next reel's voice in the background
+    }
+  };
+  const tick = () => {
+    if (tok !== playToken || t0 === null) return;
+    // Until the stream finishes, estimate total length from speaking rate (~14.5 chars/s).
+    const total = e.done ? next - t0 : Math.max(next - t0, text.length / 14.5);
+    const ch = ((ctx.currentTime - t0) / total) * text.length - titleLen;
+    starts.forEach((s, k) => { if (s <= ch) words[k]?.classList.add("on"); });
+    if (e.done && ctx.currentTime >= next) { words.forEach(w => w.classList.add("on")); return; }
+    raf = requestAnimationFrame(tick);
+  };
+  e.listeners.add(pump); pump();
+  // If the voice hasn't started in 8 s, use the device voice so the reel is never silent.
+  setTimeout(() => { if (tok === playToken && !started) { e.listeners.delete(pump); setVState(el, "🗣️ voice: device (Gemini TTS slow)"); speakBrowser(el, c); } }, 8000);
 }
 function pickVoice() {
   const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
   return vs.find(v => /Samantha|Google US English|Aria|Jenny/i.test(v.name)) || vs[0];
 }
-function speakReel(el, c, force) {
-  if (muted && !force) return;
-  speechSynthesis.cancel();
+function speakBrowser(el, c) {
   const words = el.querySelectorAll(".caption .w");
   words.forEach(w => w.classList.remove("on"));
-  const text = `${c.title}. ${c.script}`;
-  const u = new SpeechSynthesisUtterance(text);
+  const u = new SpeechSynthesisUtterance(narration(c));
   const v = pickVoice(); if (v) u.voice = v;
   u.rate = 1.05;
-  // Map character offsets back to caption words for karaoke-style highlighting.
   const offset = c.title.length + 2, starts = []; let pos = 0;
   c.script.split(/\s+/).forEach(w => { const at = c.script.indexOf(w, pos); starts.push(at); pos = at + w.length; });
   u.onboundary = e => {
     const ci = e.charIndex - offset; if (ci < 0) return;
-    let k = starts.findIndex((s, j) => ci >= s && (j === starts.length - 1 || ci < starts[j + 1]));
-    for (let j = 0; j <= k; j++) words[j]?.classList.add("on");
+    starts.forEach((s, k) => { if (s <= ci) words[k]?.classList.add("on"); });
   };
   u.onend = () => words.forEach(w => w.classList.add("on"));
   speechSynthesis.speak(u);
-  // If the browser has no boundary events, just show the whole caption.
-  setTimeout(() => { if (!el.querySelector(".w.on")) el.querySelector(".caption").classList.add("static"); }, 2500);
+  setTimeout(() => { if (!el.querySelector(".w.on")) $(".caption", el).classList.add("static"); }, 2500);
 }
-speechSynthesis.onvoiceschanged = () => {};
+
+/* ---------------- scroll tracking ---------------- */
+function onVisible(entries) {
+  entries.forEach(e => {
+    if (!e.isIntersecting || e.target === current) return;
+    current = e.target; updateProgress();
+    if (current.classList.contains("endcard")) renderEnd();
+    if (current.dataset.reel !== undefined) playReel(current, +current.dataset.reel, false);
+    else stopAudio();
+  });
+}
 
 renderReview();
 </script>

@@ -1,46 +1,102 @@
 """Unscroll: turn assigned readings into a swipeable learn-feed.
 
-Gemini Flash digests the reading (multimodal PDF -> concept reels).
-Gemma 4 (open-weight, via the Gemini API) is the tutor: quizzes + teach-back grading.
+Gemini Flash digests the reading (multimodal PDF -> concept reels, streamed one by one).
+Gemma 4 (open-weight, via the Gemini API) is the tutor: quizzes, teach-back grading, and
+judging whether a Wikimedia Commons image really fits a concept.
+Gemini TTS narrates; Gemini image generation (Vertex AI) illustrates only when no real image fits.
 """
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
+import threading
+import time
+import urllib.parse
+import urllib.request
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pymupdf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-3.8-flash")
+DIGEST_MODEL = os.environ.get("DIGEST_MODEL", "gemini-3.1-flash-lite")
 # If the primary model is overloaded (503/429), fall back so a live demo never dead-ends.
 DIGEST_FALLBACKS = [DIGEST_MODEL] + [m for m in os.environ.get(
-    "DIGEST_FALLBACKS", "gemini-3.5-flash,gemini-flash-latest,gemini-3.1-flash-lite").split(",") if m and m != DIGEST_MODEL]
+    "DIGEST_FALLBACKS", "gemini-3.8-flash,gemini-3.5-flash,gemini-flash-latest").split(",") if m and m != DIGEST_MODEL]
 TUTOR_MODEL = os.environ.get("TUTOR_MODEL", "gemma-4-26b-a4b-it")
+TTS_MODEL = os.environ.get("TTS_MODEL", "gemini-3.8-flash-tts")
+TTS_VOICE = os.environ.get("TTS_VOICE", "Puck")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image")
+GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0340911872")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 SKILL_PATH = Path(__file__).parent / "skills" / "unscroll-tutor" / "SKILL.md"
+USER_AGENT = "Unscroll/1.0 (https://github.com/lynnkhaing/Unscroll; SFSU hackathon project)"
 
 app = FastAPI(title="Unscroll")
 _client = None
+_client_lock = threading.Lock()  # clients are shared across threads; never build two (the loser closes itself)
 
 
 def client() -> genai.Client:
     global _client
-    if _client is None:
-        if not os.environ.get("GEMINI_API_KEY"):
-            raise HTTPException(500, "GEMINI_API_KEY is not set on the server.")
-        _client = genai.Client()
-    return _client
+    with _client_lock:
+        if _client is None:
+            if not os.environ.get("GEMINI_API_KEY"):
+                raise HTTPException(500, "GEMINI_API_KEY is not set on the server.")
+            _client = genai.Client()
+        return _client
 
 
-# ---------- Digest (Gemini) ----------
+def vertex() -> genai.Client:
+    """Vertex AI client billed to the project's Google Cloud credits (used for image gen + TTS fallback).
+    On Cloud Run this uses the service account; locally, Application Default Credentials or
+    GCLOUD_ACCESS_TOKEN (from `gcloud auth print-access-token`)."""
+    return vertex_at("global")
+
+
+_vertex_clients: dict[str, genai.Client] = {}
+
+
+def vertex_at(location: str) -> genai.Client:
+    with _client_lock:
+        if location not in _vertex_clients:
+            kw = dict(vertexai=True, project=GCP_PROJECT, location=location)
+            if os.environ.get("GCLOUD_ACCESS_TOKEN"):
+                from google.oauth2.credentials import Credentials
+                kw["credentials"] = Credentials(os.environ["GCLOUD_ACCESS_TOKEN"])
+            _vertex_clients[location] = genai.Client(**kw)
+        return _vertex_clients[location]
+
+
+class LRU(OrderedDict):
+    def __init__(self, size: int):
+        super().__init__()
+        self.size, self.lock = size, threading.Lock()
+
+    def get_(self, k):
+        with self.lock:
+            if k in self:
+                self.move_to_end(k)
+                return self[k]
+        return None
+
+    def put(self, k, v):
+        with self.lock:
+            self[k] = v
+            if len(self) > self.size:
+                self.popitem(last=False)
+
+
+# ---------- Digest (Gemini), streamed one concept at a time ----------
 
 class Concept(BaseModel):
     title: str
@@ -51,24 +107,20 @@ class Concept(BaseModel):
     page: int
 
 
-class DeckConcept(Concept):
-    figure_id: str
-
-
-class Deck(BaseModel):
-    deck_title: str
-    subject: str
-    concepts: list[DeckConcept]
-
-
 DIGEST_PROMPT = """You are turning an assigned college reading into a short-form learning feed
 for busy San Francisco State University students (many commute, work, or speak English as a
 second language).
 
 Extract the {n} most important concepts, in the order a learner should meet them.
-For each concept:
-- title: 2-6 words.
-- emoji: one emoji that fits.
+
+OUTPUT FORMAT: JSON Lines. One compact JSON object per line, nothing else (no markdown, no array,
+no blank lines). Write the lines in this order:
+1) {{"type":"deck","deck_title":str,"subject":str}}  (a catchy title for the whole reading + the academic subject)
+2) then {n} lines, one per concept, each:
+{{"type":"concept","title":str,"emoji":str,"script":str,"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str}}
+
+Field rules:
+- title: 2-6 words. emoji: one emoji that fits.
 - script: a 30-second narration (55-80 words). Open with a hook (question or surprising fact),
   explain in plain language at a 9th-grade reading level, end with why it matters.
   No filler, no "In this reading". Only use facts that are in the source.
@@ -77,8 +129,12 @@ For each concept:
 - page: the page number in the source where it appears (1 if unknown or plain text).
 - figure_id: the id of ONE figure from the FIGURES list below that directly illustrates this
   concept, or "" if none fits. Never reuse a figure for two concepts. Do not force a match.
-
-deck_title: a catchy title for the whole reading. subject: the academic subject.
+- image_query: 2-4 words to search Wikimedia Commons for a REAL photo or standard diagram that
+  literally shows this concept (a named person, place, event, organism, object, or well-known
+  diagram, e.g. "Kitty Genovese", "mitochondria diagram", "Golden Gate Bridge"). Use "" when the
+  concept is abstract and no literal real-world image exists (then we illustrate it instead).
+- image_prompt: one sentence describing a vivid, accurate, engaging illustration of the concept
+  (a concrete scene or metaphor; no words, letters, or numbers in the image).
 
 FIGURES (cropped from the source document):
 {figures}
@@ -139,6 +195,13 @@ def extract_figures(pdf_bytes: bytes, limit: int = 16) -> list[dict]:
     return figs
 
 
+def extract_text(pdf_bytes: bytes, max_chars: int = 120_000) -> str:
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return ""
+    return "\n".join(f"[page {i + 1}]\n{p.get_text()}" for i, p in enumerate(doc))[:max_chars]
+
 
 @app.post("/api/ingest")
 async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: int = Form(8)):
@@ -150,11 +213,17 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large (20 MB max).")
         mime = file.content_type or "application/pdf"
+        pdf_text = ""
         if mime == "application/pdf":
-            figures = extract_figures(data)
+            figures = await asyncio.to_thread(extract_figures, data)
+            pdf_text = await asyncio.to_thread(extract_text, data)
         if mime == "text/plain":
             parts.append(data.decode("utf-8", errors="ignore"))
-        else:
+        elif len(pdf_text) > 500:
+            # Text with page markers is ~10x faster to first token than sending the PDF itself;
+            # figures are already cropped separately, so no visual information is lost.
+            parts.append(f"SOURCE DOCUMENT (text, with page markers):\n{pdf_text}")
+        else:  # scanned PDF or photo of a page: let Gemini read it multimodally
             parts.append(types.Part.from_bytes(data=data, mime_type=mime))
     elif len(text.strip()) >= 200:
         parts.append(f"SOURCE TEXT:\n{text.strip()}")
@@ -163,61 +232,341 @@ async def ingest(file: UploadFile | None = File(None), text: str = Form(""), n: 
 
     fig_list = "\n".join(f"- {f['id']} (p.{f['page']}): {f['caption']}" for f in figures) or "(none)"
     parts.append(DIGEST_PROMPT.format(n=n, figures=fig_list))
-    return StreamingResponse(_heartbeat(asyncio.to_thread(digest, parts, figures)),
-                             media_type="application/json")
+    return StreamingResponse(stream_digest(parts, figures, n), media_type="application/x-ndjson")
 
 
-async def _heartbeat(work):
-    """Some browsers (Safari) drop a fetch that is silent for ~60s. Gemini can take longer on a
-    big PDF, so we stream whitespace every few seconds (valid leading JSON whitespace) and then
-    the result. Errors come back as {"detail": ...} in the body."""
-    task = asyncio.ensure_future(work)
+async def stream_digest(parts: list, figures: list[dict], n: int):
+    """NDJSON stream: deck line, then each concept as soon as Gemini finishes writing it.
+    Pings every few seconds keep slow connections (and Safari) from timing out."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    put = lambda item: loop.call_soon_threadsafe(queue.put_nowait, item)
+    threading.Thread(target=_digest_worker, args=(parts, figures, n, put), daemon=True).start()
     while True:
-        done, _ = await asyncio.wait({task}, timeout=5)
-        if done:
-            break
-        yield " "
-    try:
-        yield json.dumps(task.result())
-    except HTTPException as e:
-        yield json.dumps({"detail": e.detail, "error": True})
-    except Exception as e:
-        yield json.dumps({"detail": f"Unexpected error: {e}", "error": True})
-
-
-def digest(parts: list, figures: list[dict]) -> dict:
-    resp, errors = None, []
-    for model in DIGEST_FALLBACKS:
         try:
-            resp = client().models.generate_content(
-                model=model,
-                contents=parts,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=Deck,
-                    temperature=0.4,
-                    http_options=types.HttpOptions(timeout=90_000, retry_options=types.HttpRetryOptions(attempts=1)),
-                ),
-            )
+            item = await asyncio.wait_for(queue.get(), timeout=4)
+        except asyncio.TimeoutError:
+            yield '{"type":"ping"}\n'
+            continue
+        if item is None:
             break
-        except HTTPException:
-            raise
-        except Exception as e:
-            errors.append(f"{model}: {str(e)[:120]}")
-    if resp is None:  # surface model errors to the UI
-        raise HTTPException(502, "Gemini is busy right now, please retry. " + " | ".join(errors))
-    deck = resp.parsed if isinstance(resp.parsed, Deck) else Deck.model_validate_json(resp.text)
-    out = deck.model_dump()
+        yield json.dumps(item) + "\n"
+
+
+def _digest_worker(parts, figures, n, put):
     by_id = {f["id"]: f for f in figures}
-    used = set()
-    for c in out["concepts"]:
-        f = by_id.get(c.pop("figure_id", "").strip())
-        if f and f["id"] not in used:
-            used.add(f["id"])
-            c["figure"] = {k: f[k] for k in ("page", "caption", "data_url")}
-    out["figures_found"] = len(figures)
-    out["digest_model"] = model
+    used: set[str] = set()
+    sent = 0
+    errors = []
+    for model in DIGEST_FALLBACKS:
+        for thinking in (types.ThinkingConfig(thinking_level="low"), None):
+            try:
+                buf, deck_sent = "", False
+                cfg = types.GenerateContentConfig(temperature=0.4, thinking_config=thinking)
+                for chunk in client().models.generate_content_stream(model=model, contents=parts, config=cfg):
+                    buf += chunk.text or ""
+                    *lines, buf = buf.split("\n")
+                    for line in lines:
+                        item = _parse_line(line)
+                        if not item:
+                            continue
+                        if item.get("type") == "deck" and not deck_sent:
+                            deck_sent = True
+                            if sent == 0:
+                                put({"type": "deck", "deck_title": item.get("deck_title", "Your reading"),
+                                     "subject": item.get("subject", ""), "model": model,
+                                     "figures_found": len(figures)})
+                        elif item.get("type") == "concept" and sent < n:
+                            c = _clean_concept(item, by_id, used)
+                            if c:
+                                if sent == 0 and not deck_sent:
+                                    put({"type": "deck", "deck_title": "Your reading", "subject": "",
+                                         "model": model, "figures_found": len(figures)})
+                                    deck_sent = True
+                                put({"type": "concept", "index": sent, "concept": c})
+                                sent += 1
+                tail = _parse_line(buf)
+                if tail and tail.get("type") == "concept" and sent < n:
+                    c = _clean_concept(tail, by_id, used)
+                    if c:
+                        put({"type": "concept", "index": sent, "concept": c})
+                        sent += 1
+                if sent:
+                    put({"type": "done", "count": sent})
+                    put(None)
+                    return
+                errors.append(f"{model}: no concepts")
+                break
+            except Exception as e:
+                msg = str(e)
+                if sent:  # partial deck is still useful; finish with what we have
+                    put({"type": "done", "count": sent, "warning": msg[:200]})
+                    put(None)
+                    return
+                if thinking is not None and "hinking" in msg:
+                    continue  # model doesn't support thinking_level; retry without it
+                errors.append(f"{model}: {msg[:120]}")
+                break
+    put({"type": "error", "detail": "Gemini is busy right now, please retry. " + " | ".join(errors)})
+    put(None)
+
+
+def _parse_line(line: str):
+    line = line.strip().strip(",").strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+
+def _clean_concept(item: dict, by_id: dict, used: set) -> dict | None:
+    try:
+        c = Concept.model_validate({
+            **item,
+            "key_points": [str(k) for k in item.get("key_points") or []],
+            "page": int(item.get("page") or 1),
+            "emoji": item.get("emoji") or "💡",
+            "source_quote": item.get("source_quote") or "",
+        }).model_dump()
+    except Exception:
+        return None
+    c["image_query"] = str(item.get("image_query") or "")[:80]
+    c["image_prompt"] = str(item.get("image_prompt") or c["title"])[:400]
+    f = by_id.get(str(item.get("figure_id") or "").strip())
+    if f and f["id"] not in used:
+        used.add(f["id"])
+        c["figure"] = {"kind": "source", "page": f["page"], "caption": f["caption"], "src": f["data_url"]}
+    return c
+
+
+# ---------- Visuals: Wikimedia Commons (judged by Gemma 4) -> Gemini image (Vertex AI) ----------
+
+class VisualReq(BaseModel):
+    title: str
+    script: str
+    subject: str = ""
+    image_query: str = ""
+    image_prompt: str = ""
+
+
+_visual_cache = LRU(300)
+_pool = ThreadPoolExecutor(8)
+
+
+def _http_get(url: str, timeout: float = 8) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _strip_html(s: str) -> str:
+    return re.sub(r"<[^>]+>", "", s or "").strip()
+
+
+def wikimedia_candidates(query: str, limit: int = 4) -> list[dict]:
+    params = {
+        "action": "query", "format": "json", "generator": "search", "gsrnamespace": "6",
+        "gsrsearch": f"{query} filetype:bitmap|drawing", "gsrlimit": "10", "prop": "imageinfo",
+        "iiprop": "url|mime|size|extmetadata", "iiurlwidth": "640",
+    }
+    url = "https://commons.wikimedia.org/w/api.php?" + urllib.parse.urlencode(params)
+    data = json.loads(_http_get(url))
+    pages = sorted((data.get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 99))
+    out = []
+    for p in pages:
+        info = (p.get("imageinfo") or [{}])[0]
+        if info.get("mime") not in ("image/jpeg", "image/png", "image/svg+xml", "image/webp"):
+            continue
+        if (info.get("width") or 0) < 300:
+            continue
+        meta = info.get("extmetadata") or {}
+        out.append({
+            "title": p["title"].removeprefix("File:").rsplit(".", 1)[0],
+            "thumb": info.get("thumburl") or info.get("url"),
+            "page_url": info.get("descriptionurl"),
+            "author": _strip_html((meta.get("Artist") or {}).get("value", ""))[:80] or "Unknown author",
+            "license": (meta.get("LicenseShortName") or {}).get("value", ""),
+            "description": _strip_html((meta.get("ImageDescription") or {}).get("value", ""))[:200],
+        })
+        if len(out) >= limit:
+            break
     return out
+
+
+def pick_wikimedia(req: VisualReq) -> dict | None:
+    if not req.image_query.strip():
+        return None  # abstract concept: skip straight to an illustration
+    cands = wikimedia_candidates(req.image_query)
+    if not cands:
+        return None
+    imgs = list(_pool.map(lambda c: _safe_get(c["thumb"]), cands))
+    contents: list = [
+        f"TASK: image_fit\nConcept: {req.title} ({req.subject})\nNarration: {req.script}\n\n"
+        "Below are candidate images from Wikimedia Commons. Pick the ONE that clearly and accurately "
+        "and LITERALLY shows this specific concept for a student (a real photo of the exact person/place/"
+        "event/thing, or a correct diagram of it). A loose visual metaphor is NOT a fit. Reject generic, "
+        "decorative, off-topic, low-quality, text-heavy, or potentially offensive images. "
+        "When in doubt, answer -1 (we will illustrate it instead).\n"
+        'Return ONLY JSON: {"best": int index or -1, "reason": str}'
+    ]
+    idx_map = []
+    for i, (c, b) in enumerate(zip(cands, imgs)):
+        if not b:
+            continue
+        mime = "image/png" if b[:4] == b"\x89PNG" else "image/jpeg"
+        contents += [f"\n[{len(idx_map)}] {c['title']}: {c['description']}",
+                     types.Part.from_bytes(data=b, mime_type=mime)]
+        idx_map.append(c)
+    if not idx_map:
+        return None
+    verdict = ask_gemma(contents)
+    try:
+        best = int(verdict.get("best", -1))
+    except (TypeError, ValueError):
+        best = -1
+    if not 0 <= best < len(idx_map):
+        return None
+    c = idx_map[best]
+    return {"kind": "wikimedia", "src": c["thumb"], "title": c["title"], "author": c["author"],
+            "license": c["license"], "page_url": c["page_url"], "reason": verdict.get("reason", "")}
+
+
+def _safe_get(url: str) -> bytes | None:
+    try:
+        return _http_get(url)
+    except Exception:
+        return None
+
+
+IMAGE_STYLE = ("Bold, colorful, modern flat vector illustration with soft gradients and depth, "
+               "ONE single cohesive scene filling the frame (no panels, no collage, no triptych), engaging and friendly, accurate to the concept, diverse people "
+               "if people appear, absolutely no text, letters, numbers, or labels. Scene: ")
+
+
+# New projects get a small per-minute image quota per region+model, so we rotate across several.
+IMAGE_ENDPOINTS = [("global", IMAGE_MODEL), ("us-central1", "gemini-2.5-flash-image"),
+                   ("us-west1", "gemini-2.5-flash-image"), ("us-east1", "gemini-2.5-flash-image"),
+                   ("global", "gemini-2.5-flash-image"), ("us-east4", "gemini-2.5-flash-image")]
+_image_slots = threading.Semaphore(4)
+_image_rr = [0]
+
+
+def generate_image(req: VisualReq) -> dict | None:
+    prompt = IMAGE_STYLE + (req.image_prompt or f"an illustration of {req.title}")
+    cfg = types.GenerateContentConfig(response_modalities=["IMAGE"],
+                                      image_config=types.ImageConfig(aspect_ratio="4:3"))
+    last = None
+    with _image_slots:
+        _image_rr[0] += 1
+        start = _image_rr[0]
+        for attempt in range(len(IMAGE_ENDPOINTS) + 2):
+            loc, model = IMAGE_ENDPOINTS[(start + attempt) % len(IMAGE_ENDPOINTS)]
+            try:
+                resp = vertex_at(loc).models.generate_content(model=model, contents=prompt, config=cfg)
+                break
+            except Exception as e:  # 429 quota / 404 model not in region: try the next endpoint
+                last = e
+                if not any(x in str(e) for x in ("429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND")):
+                    raise
+                if attempt >= len(IMAGE_ENDPOINTS) - 1:
+                    time.sleep(4)
+        else:
+            raise last
+    for p in resp.candidates[0].content.parts:
+        if p.inline_data and p.inline_data.data:
+            pix = pymupdf.Pixmap(p.inline_data.data)
+            if pix.width > 900:
+                pix.shrink(1)
+            if pix.alpha:
+                pix = pymupdf.Pixmap(pix, 0)
+            jpg = pix.tobytes("jpeg", jpg_quality=82)
+            return {"kind": "ai", "src": "data:image/jpeg;base64," + base64.b64encode(jpg).decode(),
+                    "model": model}
+    return None
+
+
+@app.post("/api/visual")
+def visual(req: VisualReq):
+    key = (req.title + "|" + req.image_query).lower()
+    hit = _visual_cache.get_(key)
+    if hit:
+        return hit
+    errors = []
+    for step in (pick_wikimedia, generate_image):
+        try:
+            out = step(req)
+            if out:
+                _visual_cache.put(key, out)
+                return out
+        except Exception as e:
+            errors.append(f"{step.__name__}: {str(e)[:120]}")
+    return {"kind": "none", "errors": errors}
+
+
+# ---------- Narration (Gemini TTS, streamed) ----------
+
+class TTSReq(BaseModel):
+    text: str
+
+
+_tts_cache = LRU(200)  # text hash -> full PCM, so replays and prefetched reels are instant
+TTS_RATE = 24000
+TTS_STYLE = ("Read this like an upbeat, warm science-podcast host talking to a college student on their "
+             "commute: energetic hook, clear pacing, natural emphasis.\n\n")
+
+
+@app.post("/api/tts")
+async def tts(req: TTSReq):
+    """Streams raw 16-bit mono PCM (24 kHz) as Gemini TTS produces it: first audio in ~1s instead
+    of waiting ~10s for the whole clip. Vertex AI (Cloud credits) first, then the Gemini API key."""
+    text = req.text.strip()[:1200]
+    if not text:
+        raise HTTPException(400, "No text.")
+    key = hashlib.sha1(text.encode()).hexdigest()
+    headers = {"X-Sample-Rate": str(TTS_RATE), "Cache-Control": "no-store"}
+    hit = _tts_cache.get_(key)
+    if hit:
+        return Response(content=hit, media_type="application/octet-stream", headers=headers)
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    put = lambda item: loop.call_soon_threadsafe(queue.put_nowait, item)
+    cfg = types.GenerateContentConfig(
+        response_modalities=["AUDIO"],
+        speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=TTS_VOICE))),
+    )
+
+    def worker():
+        pcm = bytearray()
+        for make in (vertex, client):
+            try:
+                for ch in make().models.generate_content_stream(model=TTS_MODEL, contents=TTS_STYLE + text, config=cfg):
+                    for part in (ch.candidates[0].content.parts if ch.candidates and ch.candidates[0].content else []):
+                        if part.inline_data and part.inline_data.data:
+                            pcm += part.inline_data.data
+                            put(part.inline_data.data)
+                if pcm:
+                    _tts_cache.put(key, bytes(pcm))
+                    break
+            except Exception as e:
+                print("tts error", make.__name__, str(e)[:160])
+                if pcm:  # already streaming audio; can't restart mid-clip
+                    break
+        put(None)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    async def body():
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    return StreamingResponse(body(), media_type="application/octet-stream", headers=headers)
 
 
 # ---------- Tutor (Gemma 4) ----------
@@ -231,7 +580,7 @@ def tutor_instructions() -> str:
         return "You are a strict but kind study tutor. Only use the provided source text."
 
 
-def ask_gemma(prompt: str, thinking: str = "minimal") -> dict:
+def ask_gemma(prompt, thinking: str = "minimal") -> dict:
     try:
         resp = client().models.generate_content(
             model=TUTOR_MODEL,
