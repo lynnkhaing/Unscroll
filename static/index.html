@@ -407,7 +407,8 @@ function renderLearn() {
         <span><b>${esc(h.title)}</b><br><span class="small">${new Date(h.date).toLocaleDateString()} · ${concepts.length} ideas tracked${due ? ` · <span style="color:#fbbf24">${due} due for review</span>` : ""}</span></span>
         <span class="pill">${pct(h)}</span></summary>
       <div class="tbody">
-        ${srsChart(h.title)}
+        ${srsChart(h.title) || `<div class="lh">Memory strength · spaced repetition</div>
+          <p class="small" style="margin:0">📈 Your memory curve for this topic appears here after you answer a quick check or do a teach-back in it. Each answer schedules the next review: 1 → 2 → 4 → 7 → 15 days.</p>`}
         ${concepts.length ? `<div class="lh">Ideas & next review</div>` + concepts.map(([t, r]) =>
           `<div class="topic"><span>${esc(t)}</span><span class="pill">${r.reviews.at(-1)?.ok ? "✓" : "✗"} · next ${new Date(r.next).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></div>`).join("") : ""}
         ${Object.entries(expl).filter(([, e]) => e.topic === h.title).map(([t, e]) =>
