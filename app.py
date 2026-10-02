@@ -363,6 +363,22 @@ def _numbers_ok(texts: list[str], src: str) -> bool:
     return True
 
 
+def _stat_in_context(value: str, label: str, src: str, window: int = 160) -> bool:
+    """A stat must appear in the source next to what it describes, not just anywhere
+    (a bare "3" occurs in every document)."""
+    nums = [n.rstrip(".,").replace(",", "") for n in re.findall(r"\d[\d,.]*%?", value or "")]
+    stems = [w[:5] for w in _norm(label).split() if len(w) > 3 and w not in STOP]
+    plain = src.replace(",", "")
+    for n in nums:
+        for m in re.finditer(r"(?<![\d.])" + re.escape(n) + r"(?![\d])", plain):
+            ctx = plain[max(0, m.start() - window): m.end() + window]
+            if not stems or any(st in ctx for st in stems):
+                break
+        else:
+            return False
+    return bool(nums)
+
+
 def _words_ok(texts: list[str], src: str, need: float = 0.6) -> bool:
     words = [w for t in texts for w in _norm(t).split() if len(w) > 3 and w not in STOP]
     if not words:
@@ -397,7 +413,9 @@ def _check_beat(b: dict, src: str) -> dict:
     texts = out["steps"] if scene == "diagram" else [out[f] for f in fields]
     ok = bool(src)  # without source text we can't verify, so only image scenes survive
     if ok and scene == "stat":
-        ok = bool(re.search(r"\d", out["value"])) and _numbers_ok(texts, src) and _words_ok([out["label"], out["label2"]], src, .34)
+        ok = (_stat_in_context(out["value"], out["label"], src)
+              and (not out["value2"] or _stat_in_context(out["value2"], out["label2"] or out["label"], src))
+              and _numbers_ok(texts, src) and _words_ok([out["label"], out["label2"]], src, .34))
     elif ok and scene == "quote":
         q = _norm(out["text"])
         ok = len(q) > 12 and q in src

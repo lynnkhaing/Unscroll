@@ -14,28 +14,36 @@ At San Francisco State University, most students commute, many are first-generat
 
 ## How it works
 ```
-PDF / image / text
-      │
-      ▼
-PyMuPDF ── crops the reading's REAL captioned figures (Figure 8.x, tables, charts)
-      │
-      ▼
-Gemini Flash ── multimodal read → structured JSON (concepts, 30-s scripts, key points,
-      │          verbatim quote + page, and which source figure illustrates each concept)
-      │
-      ▼
-Swipe feed (scroll-snap) ── narrated reels + original figures + karaoke captions + page citations
-      │
-      ├─► Gemma 4 /api/quiz       → recall MCQs with misconception distractors
-      ├─► Gemma 4 /api/teachback  → grades the student's typed or spoken explanation ONLY against the source
-      └─► Review queue            → missed concepts are due again tomorrow
+PDF / photo / text
+   │  PyMuPDF: page text + crops the reading's REAL captioned figures
+   ▼
+Gemini Flash (streamed JSON Lines) ── first reel on screen in ~3 s, the rest stream in behind it
+   │  each concept = 30-s script + key points + verbatim quote/page + a STORYBOARD of 3-5 beats
+   ▼
+Fact-check gate (server) ── every on-screen number must appear in the source next to what it
+   │  describes; quotes must be verbatim; diagram/compare/term labels must use the source's words.
+   │  Anything unverifiable is swapped for a picture beat.
+   ▼
+Video reel (browser) ── animated scenes (Ken Burns image, count-up stat, build-up diagram,
+   │  side-by-side compare, highlighted quote, kinetic key term) synced to the narration,
+   │  one-line karaoke subtitles, story-style progress segments, transcript drawer
+   │
+   ├─ Visuals: 1) figure from your reading → 2) Wikimedia Commons photo, accepted only if
+   │           Gemma 4 (multimodal) judges it literally shows the concept → 3) Gemini image
+   │           generation on Vertex AI, always labeled "AI-generated · not from your reading"
+   ├─ Voice:   Gemini TTS streamed as raw PCM → Web Audio (first sound in ~1 s), next reel prefetched
+   ├─ Gemma 4 /api/quiz       → recall MCQs between reels
+   ├─ Gemma 4 /api/teachback  → grades the student's typed or spoken explanation ONLY against the source
+   └─ Review queue            → missed concepts are due again tomorrow
 ```
 
 ## Models (open-weight + Gemini)
 | Role | Model | Access | License / terms |
 |---|---|---|---|
-| Digest (multimodal PDF → concepts) | `gemini-3.8-flash` (auto-fallback: 3.5-flash → flash-latest → 3.1-flash-lite when overloaded) | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
-| Tutor (quiz + teach-back grading) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
+| Digest + storyboard (streamed) | `gemini-3.1-flash-lite` (auto-fallback: 3.8-flash → 3.5-flash → flash-latest when overloaded) | Gemini API | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
+| Tutor (quiz, teach-back grading, image-fit judge) | **Gemma 4** `gemma-4-26b-a4b-it` (open-weight, multimodal) | Gemini API | [Gemma license / terms](https://ai.google.dev/gemma/terms) |
+| Narration | `gemini-3.8-flash-tts` (streamed) | Vertex AI → Gemini API fallback | [Gemini API terms](https://ai.google.dev/gemini-api/terms) |
+| Illustrations (only when no real image fits) | `gemini-3.1-flash-image` / `gemini-2.5-flash-image` | Vertex AI (rotated across regions) | [Google Cloud terms](https://cloud.google.com/terms) |
 
 Why we split it this way: Gemini handles the heavy multimodal reading once per document. Gemma 4 is the open-weight tutor that runs on every student interaction. Because Gemma's weights are open, the tutor can run **on-device or on SFSU infrastructure** (for example through Ollama), so students' answers never have to leave campus. To swap models, set `TUTOR_MODEL` / `DIGEST_MODEL`.
 
@@ -46,7 +54,9 @@ The tutor's behavior is packaged as an [Agent Skill](https://agentskills.io/) at
 
 ## Google tools used
 - **Gemini API** (Gemini 3.8 Flash + Gemma 4), with keys from **Google AI Studio**
-- **Cloud Run**, which hosts the app and is paid for with the hackathon Google Cloud credits
+- **Vertex AI**: Gemini image generation and TTS, billed to the hackathon Google Cloud credits
+- **Cloud Run** + **Cloud Build**: host and build the app on the credits
+- **Wikimedia Commons API** (free, no key): real, openly licensed photos with attribution
 
 ## Run locally
 ```bash
@@ -65,7 +75,8 @@ gcloud run deploy unscroll --source . --region us-west1 --allow-unauthenticated 
 ## Responsible AI
 | Risk | What we do |
 |---|---|
-| Fake or misleading visuals | We never generate images. Visuals are only the reading's own figures, cropped unedited and labeled "FROM YOUR READING · p.N". Narration and scripts are labeled as AI-generated. |
+| Hallucinated on-screen facts | A server-side fact-check gate verifies every stat, quote, and label in the video storyboard against the source text and drops anything it can't verify. |
+| Fake or misleading visuals | Visual priority is the reading's own figures (unedited, labeled with the page) → Wikimedia Commons (credited with author + license, accepted only if Gemma judges it literally depicts the concept) → AI illustration, always labeled "AI-generated · not from your reading". Narration and scripts are labeled as AI-generated. |
 | Hallucination | Every reel shows a verbatim quote and page number. Prompts forbid outside facts. Teach-back is graded only against the source. |
 | Privacy | Uploads are processed in memory and never stored. There are no accounts, and the review queue lives in the student's own browser. The Gemma tutor can be self-hosted. |
 | Bias / language | The grader is told to ignore grammar, spelling, and transcription errors so ESL students aren't penalized. Scripts are written at a 9th-grade reading level. |
