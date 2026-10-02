@@ -226,6 +226,12 @@
   .sec { font-size: 18px; margin: 0 0 2px; }
   .secd { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
   @media (max-width: 420px) { .how { grid-template-columns: 1fr; } }
+  .tcard { border: 1px solid var(--line); border-radius: 14px; margin-top: 8px; background: #121218; }
+  .tcard summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 12px; }
+  .tcard summary::-webkit-details-marker { display: none; }
+  .tcard summary::after { content: "▸"; color: var(--muted); }
+  .tcard[open] summary::after { content: "▾"; }
+  .tbody { padding: 0 12px 12px; }
 </style>
 </head>
 <body>
@@ -267,7 +273,7 @@
 
   <section class="panel" id="learnPanel">
     <h2 class="sec">📚 Your learning</h2>
-    <p class="secd">Your progress across every reading: how well you remember each topic, your scores, the explanations you wrote, and what to study next.</p>
+    <p class="secd">One card per reading you've studied. Open a topic to see how well you remember it, when each idea is due for review, your explanations, and what to study next.</p>
     <div id="learnBody" class="small" style="margin-top:6px"></div>
   </section>
 
@@ -352,10 +358,10 @@ function srsRecord(c, ok) {
   r.reviews.push({ t: now, ok }); r.reviews = r.reviews.slice(-20);
   all[c.title] = r; saveJ("unscroll.srs", all);
 }
-function srsChart() {
+function srsChart(only) {
   // Forgetting curve per topic: retention = exp(-days since review / stability); stability grows with the box.
   const all = loadJ("unscroll.srs", "{}"), topics = {};
-  Object.entries(all).forEach(([title, r]) => (topics[r.topic || "Other"] ||= []).push(r));
+  Object.entries(all).forEach(([title, r]) => { if (!only || r.topic === only) (topics[r.topic || "Other"] ||= []).push(r); });
   const names = Object.keys(topics).slice(0, 4);
   if (!names.length) return "";
   const W = 320, H = 150, P = 28, days = 14, now = Date.now();
@@ -390,22 +396,33 @@ function saveHist() {
 }
 function renderLearn() {
   const all = loadHist(), body = $("#learnBody");
-  if (!all.length && !Object.keys(loadJ("unscroll.srs", "{}")).length) { body.innerHTML = "Your topics, quiz scores, and teach-back explanations will show up here. Saved on this device: no account needed."; return; }
+  if (!all.length) { body.innerHTML = "Your topics, quiz scores, and teach-back explanations will show up here. Saved on this device: no account needed."; return; }
+  const srs = loadJ("unscroll.srs", "{}"), expl = loadJ("unscroll.expl", "{}");
   const pct = h => h.quiz.answered ? Math.round(100 * h.quiz.correct / h.quiz.answered) + "% quiz" : "no quiz yet";
-  const tb = h => h.teach.length ? " · teach-back " + Math.round(h.teach.reduce((a, t) => a + t.score, 0) / h.teach.length) : "";
-  const ex = Object.entries(loadJ("unscroll.expl", "{}")).map(([title, e]) => ({ title, ...e })).sort((a, b) => b.date - a.date).slice(0, 4);
-  const next = (all.find(h => h.next?.length) || {}).next || [];
-  body.innerHTML = srsChart() + `<div class="lh">Topics</div>` + all.slice(0, 6).map(h =>
-      `<div class="topic"><span>${esc(h.title)} <span class="small">· ${new Date(h.date).toLocaleDateString()}</span></span><span class="pill">${pct(h)}${tb(h)}</span></div>`).join("") +
-    (ex.length ? `<div class="lh">Your explanations</div>` + ex.map(t =>
-      `<div class="topic"><span><b>${esc(t.title)}</b>: “${esc((t.text || "").slice(0, 90))}${(t.text || "").length > 90 ? "…" : ""}”</span><span class="pill">${t.score}/100</span></div>`).join("") : "") +
-    (next.length ? `<div class="lh">What to learn next (suggested by Gemma 4)</div>` + next.map(t =>
-      `<button type="button" class="nexttopic" data-topic="${esc(t.topic)}">🧭 ${esc(t.topic)}<small>${esc(t.why)} · tap to load a Wikipedia reading</small></button>`).join("") : "") +
-    `<p class="small" style="margin-top:12px">Saved on this device only. Sign-in to sync across devices is next on the roadmap.</p>`;
+  const seen = new Set(), topics = all.filter(h => !seen.has(h.title) && seen.add(h.title)).slice(0, 8);
+  body.innerHTML = `<p class="small" style="margin:0 0 6px">Tap a topic to see your stats for it.</p>` + topics.map((h, ti) => {
+    const concepts = Object.entries(srs).filter(([, r]) => r.topic === h.title);
+    const due = concepts.filter(([, r]) => r.next <= Date.now() + 864e5).length;
+    return `<details class="tcard"${ti === 0 ? " open" : ""}><summary>
+        <span><b>${esc(h.title)}</b><br><span class="small">${new Date(h.date).toLocaleDateString()} · ${concepts.length} ideas tracked${due ? ` · <span style="color:#fbbf24">${due} due for review</span>` : ""}</span></span>
+        <span class="pill">${pct(h)}</span></summary>
+      <div class="tbody">
+        ${srsChart(h.title)}
+        ${concepts.length ? `<div class="lh">Ideas & next review</div>` + concepts.map(([t, r]) =>
+          `<div class="topic"><span>${esc(t)}</span><span class="pill">${r.reviews.at(-1)?.ok ? "✓" : "✗"} · next ${new Date(r.next).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></div>`).join("") : ""}
+        ${Object.entries(expl).filter(([, e]) => e.topic === h.title).map(([t, e]) =>
+          `<div class="topic"><span>✍️ <b>${esc(t)}</b>: “${esc((e.text || "").slice(0, 90))}${(e.text || "").length > 90 ? "…" : ""}”</span><span class="pill">${e.score}/100</span></div>`).join("")}
+        ${h.next?.length ? `<div class="lh">What to learn next</div>
+          <p class="small" style="margin:0 0 4px">Gemma 4 picked these from what you just studied and where you struggled. Tap one to load a Wikipedia article about it, then press <b>Unscroll it</b> to turn it into a new feed.</p>` +
+          h.next.map(t => `<button type="button" class="nexttopic" data-topic="${esc(t.topic)}">🧭 ${esc(t.topic)}<small>${esc(t.why)}</small></button>`).join("") : ""}
+      </div></details>`;
+  }).join("") + `<p class="small" style="margin-top:12px">Saved on this device only. Sign-in to sync across devices is next on the roadmap.</p>`;
   body.querySelectorAll(".nexttopic").forEach(b => b.onclick = () => {
     $("#url").value = "https://en.wikipedia.org/wiki/Special:Search?search=" + encodeURIComponent(b.dataset.topic) + "&go=Go";
     $("#text").value = ""; pickedFile = null; $("#fname").textContent = "";
     $("#url").scrollIntoView({ behavior: "smooth", block: "center" });
+    setStatus("Link loaded for “" + esc(b.dataset.topic) + "”. Press Unscroll it →", false);
+    $("#status .spinner")?.remove();
   });
 }
 
