@@ -196,6 +196,12 @@
     background: rgba(15,15,22,.96); border: 1px solid var(--line); border-radius: 18px; padding: 16px; font-size: 15px; }
   .transcript h3 { margin: 0 0 8px; }
   @media (prefers-reduced-motion: reduce) { .scene.on .kb, .scene.on .seq, .scene.on .pop, .ph, .ph span { animation: none; } }
+  .pp { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .pp span { font-size: 64px; background: rgba(0,0,0,.45); border-radius: 50%; width: 110px; height: 110px; display: flex;
+    align-items: center; justify-content: center; opacity: 0; transition: opacity .2s; }
+  .pp.show span { opacity: 1; }
+  .endov { position: absolute; left: 0; right: 0; bottom: 150px; z-index: 6; display: flex; gap: 12px; justify-content: center; }
+  .endov .btn { box-shadow: 0 8px 24px rgba(0,0,0,.5); }
 </style>
 </head>
 <body>
@@ -494,10 +500,11 @@ function reelCard(i) {
   el.innerHTML = `<div class="stage">${beats.map((b, k) => sceneHtml(c, b, k)).join("")}</div>
     <div class="segs">${beats.map(() => `<i class="seg"><b></b></i>`).join("")}</div>
     <div class="hud"><span class="chip">${esc(c.emoji)} ${esc(c.title)}</span></div>
+    <div class="pp"><span>⏸</span></div>
     <div class="subtitle" aria-live="off"></div>
     <div class="credit"><span class="vcredit">${creditHtml(c)}</span> <span class="vstate">🎙️ AI voice</span></div>
     <div class="side">
-      <button type="button" class="replay" aria-label="Play narration">▶</button>
+      <button type="button" class="replay" aria-label="Play or pause">⏸</button>
       <button type="button" class="tx" aria-label="Show transcript">📝</button>
       <button type="button" class="save" aria-label="Save to review queue">🔖</button>
     </div>
@@ -507,7 +514,8 @@ function reelCard(i) {
       <div class="ai-note">Script &amp; voice are AI-generated from your reading. On-screen numbers, quotes, and labels are checked against the source text; anything unverifiable is replaced with a picture.</div>
     </div>`;
   el._beats = beats; el._chunks = chunksOf(c.script); el._beat = -1; el._chunk = -1;
-  $(".replay", el).onclick = () => playReel(el, i, true);
+  $(".replay", el).onclick = () => el._ended ? playReel(el, i, true) : togglePause(el);
+  $(".stage", el).onclick = () => { if (!el._ended) togglePause(el); };
   $(".tx", el).onclick = () => $(".transcript", el).classList.toggle("hidden");
   $(".save", el).onclick = e => { addToReview(c, "saved"); e.currentTarget.textContent = "✅"; };
   showAt(el, 0);
@@ -729,7 +737,45 @@ function getTTS(c) {
 }
 
 let playToken = 0, raf = 0, sources = [];
+let paused = false, pauseStart = 0, pausedTotal = 0;
+const pnow = () => performance.now() - pausedTotal - (paused ? performance.now() - pauseStart : 0);
+function togglePause(el) {
+  const ov = $(".pp", el), btn = $(".replay", el);
+  if (!paused) {
+    paused = true; pauseStart = performance.now();
+    try { actx && actx.suspend(); } catch {}
+    try { speechSynthesis.pause(); } catch {}
+    $("span", ov).textContent = "⏸"; ov.classList.add("show"); btn.textContent = "▶";
+  } else {
+    paused = false; pausedTotal += performance.now() - pauseStart;
+    try { actx && actx.resume(); } catch {}
+    try { speechSynthesis.resume(); } catch {}
+    $("span", ov).textContent = "▶"; ov.classList.add("show"); btn.textContent = "⏸";
+    setTimeout(() => ov.classList.remove("show"), 500);
+  }
+}
+function reelEnded(el, tok) {
+  if (el._ended || tok !== playToken) return;
+  el._ended = true;
+  $(".replay", el).textContent = "↻";
+  const i = +el.dataset.reel, ov = document.createElement("div");
+  ov.className = "endov";
+  ov.innerHTML = `<button class="btn ghost" type="button">↻ Replay</button><button class="btn" type="button">Next ↓ <span class="cd">3</span></button>`;
+  el.appendChild(ov);
+  const [rp, nx] = ov.querySelectorAll("button");
+  const goNext = () => { const n = el.nextElementSibling; if (n) feed.scrollTo({ top: n.offsetTop, behavior: "smooth" }); };
+  rp.onclick = e => { e.stopPropagation(); playReel(el, i, true); };
+  nx.onclick = e => { e.stopPropagation(); goNext(); };
+  let left = 3;
+  const t = setInterval(() => {
+    if (tok !== playToken || !el.contains(ov)) return clearInterval(t);
+    if (paused) return;
+    left--; const cd = $(".cd", ov); if (cd) cd.textContent = left;
+    if (left <= 0) { clearInterval(t); goNext(); }
+  }, 1000);
+}
 function stopAudio() {
+  if (paused) { paused = false; pausedTotal += performance.now() - pauseStart; try { actx && actx.resume(); } catch {} }
   playToken++; cancelAnimationFrame(raf);
   sources.forEach(s => { try { s.stop(); } catch {} }); sources = [];
   try { speechSynthesis.cancel(); } catch {}
@@ -743,19 +789,22 @@ function clock(el, tok, getCh, len) {
     const ch = getCh();
     if (ch != null) showAt(el, ch);
     if (ch == null || ch <= len) raf = requestAnimationFrame(loop);
+    else reelEnded(el, tok);
   };
   raf = requestAnimationFrame(loop);
 }
 const CPS = 14.5;  // typical narration speed, chars/second
 function silentClock(el, tok, c, msg) {
   setVState(el, msg);
-  const t0 = performance.now();
-  clock(el, tok, () => (performance.now() - t0) / 1000 * CPS, c.script.length + 1);
+  const t0 = pnow();
+  clock(el, tok, () => (pnow() - t0) / 1000 * CPS, c.script.length + 1);
 }
 function playReel(el, i, force) {
   stopAudio();
   const c = deck.concepts[i], tok = playToken;
   $(".replay", el).classList.remove("attn");
+  $(".replay", el).textContent = "⏸";
+  el._ended = false; el.querySelector(".endov")?.remove(); $(".pp", el).classList.remove("show");
   el._beat = -1; el._chunk = -1; showAt(el, 0);
   if (muted && !force) return silentClock(el, tok, c, "🔇 muted · captions only");
   const ctx = ensureCtx();
@@ -800,13 +849,13 @@ function speakBrowser(el, c, tok) {
   const u = new SpeechSynthesisUtterance(narration(c));
   const v = pickVoice(); if (v) u.voice = v;
   u.rate = 1.05;
-  const titleLen = c.title.length + 2, t0 = performance.now();
+  const titleLen = c.title.length + 2, t0 = pnow();
   let last = null, done = false;
   u.onboundary = e => { last = e.charIndex - titleLen; };
   u.onend = () => { done = true; };
   speechSynthesis.speak(u);
   // Use real word boundaries when the browser reports them, otherwise estimate from time.
-  clock(el, tok, () => done ? 1e9 : (last ?? ((performance.now() - t0) / 1000 * CPS - titleLen)), c.script.length + 1);
+  clock(el, tok, () => done ? 1e9 : (last ?? ((pnow() - t0) / 1000 * CPS - titleLen)), c.script.length + 1);
 }
 
 /* ---------------- scroll tracking ---------------- */

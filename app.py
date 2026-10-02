@@ -118,7 +118,7 @@ no blank lines). Write the lines in this order:
 1) {{"type":"deck","deck_title":str,"subject":str}}  (a catchy title for the whole reading + the academic subject)
 2) then {n} lines, one per concept, each:
 {{"type":"concept","title":str,"emoji":str,"script":str,"beats":[beat],"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str}}
-EVERY concept line MUST include "beats" (3-5 beats), not just the first one.
+EVERY concept line MUST include "beats" (5-7 beats), not just the first one.
 
 Field rules:
 - title: 2-6 words. emoji: one emoji that fits.
@@ -137,11 +137,12 @@ Field rules:
 - image_prompt: one sentence describing a vivid, accurate, engaging illustration of the concept
   (a concrete scene or metaphor; no words, letters, or numbers in the image).
 
-- beats: a storyboard of 3-5 animated scenes that play while the script is narrated, like a
+- beats: a storyboard of 5-7 animated scenes (roughly one per sentence, so the picture changes
+  every few seconds) that play while the script is narrated, like a
   short explainer video. Each beat: {{"say": the exact consecutive words of the script spoken
   during this scene (beats in order, together covering the whole script), "scene": one of the
   scene types below, plus that scene's fields}}. Make it feel like a motion-graphics explainer:
-  use AT MOST 2 "image" beats per reel, and AT LEAST one "diagram", "compare", "quote", or "stat"
+  use AT MOST 3 "image" beats per reel (each with a different focus), and AT LEAST two "diagram", "compare", "quote", "stat", or "term"
   beat. Start with "image" or "term".
   Example beat: {{"say":"Alone, 85% helped; with four others, only 31% did.","scene":"stat","value":"85%","label":"helped when alone","value2":"31%","label2":"with four others"}}
   ("scene" is always a plain string; the scene's fields sit next to it.)
@@ -452,11 +453,11 @@ def _storyboard(item: dict, script: str, src: str) -> list[dict]:
     raw = item.get("beats") if isinstance(item.get("beats"), list) else []
     if not raw:
         raw = _auto_beats(item, script)
-    beats = [_check_beat(b, src) for b in raw[:6] if isinstance(b, dict)]
+    beats = [_check_beat(b, src) for b in raw[:8] if isinstance(b, dict)]
     # collapse runs of plain image beats (e.g. from dropped facts) so the reel keeps moving
     merged = []
     for b in beats:
-        if merged and b["scene"] == "image" and merged[-1]["scene"] == "image":
+        if merged and b["scene"] == "image" and merged[-1]["scene"] == "image" and b.get("focus") == merged[-1].get("focus"):
             merged[-1]["say"] = (merged[-1]["say"] + " " + b["say"]).strip()
             continue
         merged.append(b)
@@ -782,8 +783,8 @@ def quiz(req: QuizReq):
         for i, c in enumerate(req.concepts)
     )
     prompt = f"""TASK: quiz
-For EACH concept below write one multiple-choice recall question that tests understanding
-(not trivia). 4 options, exactly one correct. Wrong options must be plausible misconceptions
+For EACH concept below write one SHORT multiple-choice recall question that checks the core idea
+(not trivia). The question is at most 12 words. Each option is at most 6 words. 4 options, exactly one correct. Wrong options must be plausible misconceptions
 a confused student might actually believe: no joke or absurd options. Vary the position of the correct answer.
 
 Return ONLY JSON: {{"questions": [{{"concept_index": int, "question": str,
