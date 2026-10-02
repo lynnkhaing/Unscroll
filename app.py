@@ -117,7 +117,8 @@ OUTPUT FORMAT: JSON Lines. One compact JSON object per line, nothing else (no ma
 no blank lines). Write the lines in this order:
 1) {{"type":"deck","deck_title":str,"subject":str}}  (a catchy title for the whole reading + the academic subject)
 2) then {n} lines, one per concept, each:
-{{"type":"concept","title":str,"emoji":str,"script":str,"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str,"beats":[beat]}}
+{{"type":"concept","title":str,"emoji":str,"script":str,"beats":[beat],"key_points":[str],"source_quote":str,"page":int,"figure_id":str,"image_query":str,"image_prompt":str}}
+EVERY concept line MUST include "beats" (3-5 beats), not just the first one.
 
 Field rules:
 - title: 2-6 words. emoji: one emoji that fits.
@@ -283,6 +284,8 @@ def _digest_worker(parts, figures, n, put, source=""):
                 buf, deck_sent = "", False
                 cfg = types.GenerateContentConfig(temperature=0.4, thinking_config=thinking)
                 for chunk in client().models.generate_content_stream(model=model, contents=parts, config=cfg):
+                    if os.environ.get("DEBUG_RAW"):
+                        print("RAW", model, repr((chunk.text or "")[:120]), flush=True)
                     buf += chunk.text or ""
                     *lines, buf = buf.split("\n")
                     for line in lines:
@@ -426,9 +429,34 @@ def _check_beat(b: dict, src: str) -> dict:
     return out if ok else {"say": out["say"], "scene": "image", "focus": "center", "dropped": scene}
 
 
+def _auto_beats(item: dict, script: str) -> list[dict]:
+    """Fallback storyboard when the model skips beats: built only from verifiable material."""
+    sents = re.split(r"(?<=[.!?])\s+", script.strip())
+    third = max(1, len(sents) // 3)
+    groups = [" ".join(sents[:third]), " ".join(sents[third:2 * third]), " ".join(sents[2 * third:])]
+    kp = [str(k) for k in item.get("key_points") or []]
+    middle = {"scene": "quote", "text": str(item.get("source_quote") or "")}
+    if len(kp) >= 2:
+        middle = {"scene": "diagram", "steps": [" ".join(k.split()[:3]) for k in kp[:4]]}
+    return [{"say": groups[0], "scene": "term", "term": str(item.get("title") or ""), "definition": " ".join((kp[:1] or [""])[0].split()[:12])},
+            {"say": groups[1], **middle},
+            {"say": groups[2], "scene": "quote", "text": str(item.get("source_quote") or "")},
+            {"say": "", "scene": "image", "focus": "center"}][:4]
+
+
 def _storyboard(item: dict, script: str, src: str) -> list[dict]:
     raw = item.get("beats") if isinstance(item.get("beats"), list) else []
+    if not raw:
+        raw = _auto_beats(item, script)
     beats = [_check_beat(b, src) for b in raw[:6] if isinstance(b, dict)]
+    # collapse runs of plain image beats (e.g. from dropped facts) so the reel keeps moving
+    merged = []
+    for b in beats:
+        if merged and b["scene"] == "image" and merged[-1]["scene"] == "image":
+            merged[-1]["say"] = (merged[-1]["say"] + " " + b["say"]).strip()
+            continue
+        merged.append(b)
+    beats = merged
     if not beats:
         beats = [{"say": script, "scene": "image", "focus": "center"}]
     # Timing: each beat starts where its words begin in the script (fallback: evenly spaced).
@@ -460,7 +488,8 @@ def _clean_concept(item: dict, by_id: dict, used: set, src: str = "") -> dict | 
     try:
         c["beats"] = _storyboard(item, c["script"], src)
     except Exception as e:  # a malformed storyboard must never cost us the reel
-        print("storyboard error", e)
+        import traceback
+        print("storyboard error", repr(e), traceback.format_exc()[-600:], flush=True)
         c["beats"] = [{"say": c["script"], "scene": "image", "focus": "center", "at": 0}]
     f = by_id.get(str(item.get("figure_id") or "").strip())
     if f and f["id"] not in used:
